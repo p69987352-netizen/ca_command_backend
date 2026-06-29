@@ -2,6 +2,8 @@ package com.caCommand.caCommand.services;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import tools.jackson.databind.JsonNode;
@@ -11,19 +13,23 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class WhatsAppMediaService {
 
-    @Value("${whatsapp.access-token}")
-    private String accessToken;
+    private static final Logger log = LoggerFactory.getLogger(WhatsAppMediaService.class);
 
+    private final String accessToken;
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
-    // 🌟 INJECT CLOUDINARY SERVICE
-    private final CloudinaryService cloudinaryService;
+    private final S3StorageService S3StorageService;
 
-    public WhatsAppMediaService(CloudinaryService cloudinaryService) {
-        this.restTemplate = new RestTemplate();
+    public WhatsAppMediaService(
+            @Value("${whatsapp.access-token}") String accessToken,
+            RestTemplate restTemplate,
+            S3StorageService S3StorageService
+    ) {
+        this.accessToken = accessToken;
+        this.restTemplate = restTemplate;
         this.objectMapper = new ObjectMapper();
-        this.cloudinaryService = cloudinaryService;
+        this.S3StorageService = S3StorageService;
     }
 
     public String downloadAndSaveMedia(String mediaId, String phoneNumber) {
@@ -45,16 +51,16 @@ public class WhatsAppMediaService {
             if (fileBytes != null) {
                 // 🌟 3. MAGIC: Upload directly to Cloudinary instead of saving to Laptop!
                 String fileName = phoneNumber + "_" + mediaId; // Unique name
-                String cloudinaryUrl = cloudinaryService.uploadMedia(fileBytes, fileName);
+                String s3Url = S3StorageService.uploadMedia(fileBytes, fileName);
 
-                System.out.println("☁️✅ File successfully uploaded to Cloudinary: " + cloudinaryUrl);
+                log.info("Uploaded WhatsApp media to Cloudinary for phone={} mediaId={}", phoneNumber, mediaId);
 
                 // Return the LIVE web link so it saves in the database!
-                return cloudinaryUrl;
+                return s3Url;
             }
 
         } catch (Exception e) {
-            System.err.println("❌ Error downloading or uploading media: " + e.getMessage());
+            log.warn("Failed to download or upload WhatsApp media mediaId={}", mediaId, e);
         }
         return null;
     }

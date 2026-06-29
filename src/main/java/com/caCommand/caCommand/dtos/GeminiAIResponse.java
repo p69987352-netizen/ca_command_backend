@@ -4,11 +4,10 @@ import java.util.List;
 
 public class GeminiAIResponse {
 
+    private String name;       // Client's first name extracted from message
     private String city;
     private String service;
     private String reply_message;
-
-    // 🌟 NAYE FIELDS JO AAPNE PROMPT MEIN ADD KIYE HAIN
     private List<String> documents_required;
     private String conversation_stage;
 
@@ -16,13 +15,10 @@ public class GeminiAIResponse {
     public GeminiAIResponse() {
     }
 
-    public GeminiAIResponse(String city, String service, String reply_message) {
-        this.city = city;
-        this.service = service;
-        this.reply_message = reply_message;
-    }
-
     // Getters and Setters
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+
     public String getCity() { return city; }
     public void setCity(String city) { this.city = city; }
 

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout" layout:decorate="~{layout}">
+<head>
+    <title>Dashboard | Phorwal CA Firm</title>
+</head>
+<body>
+
+<main layout:fragment="content">
+    
+    <!-- Stats Strip — War Dashboard -->
+    <section class="stats-strip">
+        <article class="stat-card">
+            <div class="stat-icon stat-gold"><i class="fa-solid fa-users"></i></div>
+            <div class="stat-info">
+                <div class="num" th:text="${totalClients}">0</div>
+                <div class="lbl">Total Clients</div>
+            </div>
+        </article>
+        <article class="stat-card">
+            <div class="stat-icon stat-blue"><i class="fa-solid fa-scroll"></i></div>
+            <div class="stat-info">
+                <div class="num" th:text="${activeTickets}">0</div>
+                <div class="lbl">Active Tickets</div>
+            </div>
+        </article>
+        <article class="stat-card">
+            <div class="stat-icon stat-green"><i class="fa-solid fa-circle-check"></i></div>
+            <div class="stat-info">
+                <div class="num">0</div>
+                <div class="lbl">Completed Work</div>
+            </div>
+        </article>
+    </section>
+
+    <!-- Table Area -->
+    <div class="content-wrap mt-4">
+        <div class="card-table">
+            <div class="p-3 border-bottom d-flex justify-content-between align-items-center bg-light">
+                <h6 class="m-0"><i class="fa-solid fa-address-book" style="color: #D4AF37;"></i> Client Directory</h6>
+            </div>
+            <table class="table table-hover mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Name</th>
+                        <th>Phone Number</th>
+                        <th class="text-end">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="client : ${clients}">
+                        <td><strong th:text="${client.name}">John Doe</strong></td>
+                        <td class="text-muted" th:text="${client.phoneNumber}">+91 9999999999</td>
+                        <td class="text-end">
+                            <a th:href="@{/admin/client/{id}(id=${client.id})}" class="btn-action-gold btn-sm" style="font-size: 0.8rem;">
+                                <i class="fa-solid fa-eye"></i> View Profile
+                            </a>
+                        </td>
+                    </tr>
+                    <tr th:if="${#lists.isEmpty(clients)}">
+                        <td colspan="3">
+                            <div class="empty-state">
+                                <i class="fa-solid fa-ghost"></i>
+                                <h5>No clients found</h5>
+                                <p>When clients send messages on WhatsApp, they will appear here.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</main>
+
+</body>
+</html>

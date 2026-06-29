@@ -1,8 +1,11 @@
 package com.caCommand.caCommand.controller;
 
+import com.caCommand.caCommand.dtos.StaffClientMessageRequest;
+import com.caCommand.caCommand.dtos.StaffProgressUpdateRequest;
 import com.caCommand.caCommand.dtos.FinalDeliveryRequest;
 import com.caCommand.caCommand.entities.Ticket;
 import com.caCommand.caCommand.services.AdminTicketService;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -25,11 +28,16 @@ public class StaffController {
         return ResponseEntity.ok(adminTicketService.getInProgressTickets());
     }
 
+    @GetMapping("/{staffId}/tickets")
+    public ResponseEntity<List<Ticket>> getStaffTickets(@PathVariable String staffId) {
+        return ResponseEntity.ok(adminTicketService.getWorkQueueForStaff(staffId));
+    }
+
     // API to deliver final work to client via WhatsApp
     @PostMapping("/tickets/{ticketId}/deliver")
     public ResponseEntity<Ticket> deliverFinalWork(
-            @PathVariable UUID ticketId,
-            @RequestBody FinalDeliveryRequest request) {
+            @PathVariable String ticketId,
+            @Valid @RequestBody FinalDeliveryRequest request) {
 
         Ticket finishedTicket = adminTicketService.completeTicketAndDeliver(ticketId, request.getFinalDocumentUrl(), request.getClosingMessage());
         return ResponseEntity.ok(finishedTicket);
@@ -37,10 +45,26 @@ public class StaffController {
 
     @PostMapping("/tickets/{ticketId}/submit-qc")
     public ResponseEntity<Ticket> submitForQC(
-            @PathVariable UUID ticketId,
+            @PathVariable String ticketId,
             @RequestBody String documentUrl) { // Abhi simple string le rahe hain
 
         Ticket submittedTicket = adminTicketService.submitWorkForQC(ticketId, documentUrl);
         return ResponseEntity.ok(submittedTicket);
+    }
+
+    @PostMapping("/tickets/{ticketId}/client-message")
+    public ResponseEntity<Ticket> messageClient(
+            @PathVariable String ticketId,
+            @Valid @RequestBody StaffClientMessageRequest request) {
+
+        return ResponseEntity.ok(adminTicketService.staffMessageClient(ticketId, request));
+    }
+
+    @PostMapping("/tickets/{ticketId}/progress")
+    public ResponseEntity<Ticket> updateProgress(
+            @PathVariable String ticketId,
+            @Valid @RequestBody StaffProgressUpdateRequest request) {
+
+        return ResponseEntity.ok(adminTicketService.staffUpdateProgress(ticketId, request));
     }
 }

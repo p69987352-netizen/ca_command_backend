@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="CA Command — The Supreme Admin Command Center by Phorwal CA Firm. Manage client work, staff, and more with divine precision.">
+    <title>CA Command — Phorwal CA Firm</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Cinzel:wght@400;500;600;700;900&family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" th:href="@{/styles.css}">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+</head>
+<body>
+
+<!-- Golden Particle Overlay -->
+<div class="particle-overlay" id="particleOverlay"></div>
+
+<!-- =========================================================
+     SIDEBAR — Ancient War Council
+     ========================================================= -->
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+        <div class="brand-icon">
+            <!-- Sudarshan Chakra SVG -->
+            <svg viewBox="0 0 100 100" width="42" height="42" class="chakra-svg">
+                <circle cx="50" cy="50" r="45" fill="none" stroke="#D4AF37" stroke-width="2" opacity="0.4"/>
+                <circle cx="50" cy="50" r="35" fill="none" stroke="#FFD700" stroke-width="1.5" opacity="0.6"/>
+                <circle cx="50" cy="50" r="8" fill="#D4AF37"/>
+                <g stroke="#D4AF37" stroke-width="2">
+                    <line x1="50" y1="5" x2="50" y2="20"/><line x1="50" y1="80" x2="50" y2="95"/>
+                    <line x1="5" y1="50" x2="20" y2="50"/><line x1="80" y1="50" x2="95" y2="50"/>
+                    <line x1="18" y1="18" x2="29" y2="29"/><line x1="71" y1="71" x2="82" y2="82"/>
+                    <line x1="82" y1="18" x2="71" y2="29"/><line x1="29" y1="71" x2="18" y2="82"/>
+                    <line x1="50" y1="5" x2="35" y2="18"/><line x1="50" y1="5" x2="65" y2="18"/>
+                    <line x1="95" y1="50" x2="82" y2="35"/><line x1="95" y1="50" x2="82" y2="65"/>
+                    <line x1="50" y1="95" x2="35" y2="82"/><line x1="50" y1="95" x2="65" y2="82"/>
+                    <line x1="5" y1="50" x2="18" y2="35"/><line x1="5" y1="50" x2="18" y2="65"/>
+                </g>
+            </svg>
+        </div>
+        <div class="brand-text">
+            <h5>CA Command</h5>
+            <small>⚔️ Phorwal CA Firm</small>
+        </div>
+    </div>
+
+    <!-- Sidebar Divider -->
+    <div class="sidebar-divider"></div>
+
+    <span class="nav-section-label">कार्यक्षेत्र · Workspace</span>
+    <a href="/admin/dashboard" class="nav-link" th:classappend="${currentUri == '/admin/dashboard' ? 'active' : ''}">
+        <span class="nav-icon"><i class="fa-solid fa-scroll"></i></span>
+        <span class="nav-text">Client Work</span>
+    </a>
+
+    <span class="nav-section-label">सेना · Team</span>
+    <a href="#" class="nav-link">
+        <span class="nav-icon"><i class="fa-solid fa-users"></i></span>
+        <span class="nav-text">Manage Staff</span>
+    </a>
+
+    <div class="sidebar-footer">
+        <div class="admin-pill">
+            <div class="admin-avatar">
+                <i class="fa-solid fa-om"></i>
+            </div>
+            <div class="admin-info">
+                <p>Phorwal CA</p>
+                <small>🏛️ Admin Console</small>
+            </div>
+        </div>
+        <div class="sidebar-quote">
+            <em>"धर्मो रक्षति रक्षितः"</em>
+        </div>
+    </div>
+</aside>
+
+<!-- =========================================================
+     MAIN CONTENT
+     ========================================================= -->
+<main class="main-content">
+    <header class="topbar">
+        <div class="topbar-left">
+            <h4 id="pageTitle" class="topbar-title" th:text="${pageTitle} ?: 'Active Client Work'">Active Client Work</h4>
+            <p id="pageSubtitle" class="topbar-subtitle" th:text="${pageSubtitle} ?: 'Track client files, approvals, payments and delivery.'">Track client files, approvals, payments and delivery.</p>
+        </div>
+        <div class="topbar-right">
+            <button class="btn btn-outline-secondary btn-sm" id="refreshBtn" onclick="window.location.reload()">
+                <i class="fa-solid fa-rotate-right"></i> Refresh
+            </button>
+        </div>
+    </header>
+
+    <!-- Dynamic Page Content -->
+    <div layout:fragment="content">
+        <!-- Child templates will inject content here -->
+    </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Golden Particle Animation Script -->
+<script>
+(function() {
+    const overlay = document.getElementById('particleOverlay');
+    if (!overlay) return;
+    
+    // Create floating golden particles
+    for (let i = 0; i < 30; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'golden-particle';
+        particle.style.left = Math.random() * 100 + '%';
+        particle.style.animationDelay = Math.random() * 15 + 's';
+        particle.style.animationDuration = (10 + Math.random() * 20) + 's';
+        particle.style.width = particle.style.height = (2 + Math.random() * 4) + 'px';
+        particle.style.opacity = 0.2 + Math.random() * 0.5;
+        overlay.appendChild(particle);
+    }
+})();
+</script>
+</body>
+</html>

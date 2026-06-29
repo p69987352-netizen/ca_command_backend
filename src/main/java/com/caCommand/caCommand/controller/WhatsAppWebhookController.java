@@ -2,66 +2,70 @@ package com.caCommand.caCommand.controller;
 
 import com.caCommand.caCommand.security.WhatsAppSecurityUtils;
 import com.caCommand.caCommand.services.WebhookProcessorService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/webhook/whatsapp")
 public class WhatsAppWebhookController {
 
-    // Ab token application.properties se aayega
-    @Value("${whatsapp.verify-token}")
-    private String verifyToken;
+    private static final Logger log = LoggerFactory.getLogger(WhatsAppWebhookController.class);
 
+    private final String verifyToken;
     private final WhatsAppSecurityUtils securityUtils;
     private final WebhookProcessorService processorService;
 
-    public WhatsAppWebhookController(WhatsAppSecurityUtils securityUtils, WebhookProcessorService processorService) {
+    public WhatsAppWebhookController(
+            @Value("${whatsapp.verify-token}") String verifyToken,
+            WhatsAppSecurityUtils securityUtils,
+            WebhookProcessorService processorService
+    ) {
+        this.verifyToken = verifyToken;
         this.securityUtils = securityUtils;
         this.processorService = processorService;
     }
 
-    /**
-     * 1. GET Request: Meta uses this to verify your URL initially.
-     */
     @GetMapping
     public ResponseEntity<String> verifyWebhook(
             @RequestParam(name = "hub.mode", required = false) String mode,
             @RequestParam(name = "hub.verify_token", required = false) String token,
-            @RequestParam(name = "hub.challenge", required = false) String challenge) {
-
-        // Hardcoded string ki jagah hum directly properties wali value (verifyToken) use kar rahe hain
+            @RequestParam(name = "hub.challenge", required = false) String challenge
+    ) {
         if ("subscribe".equals(mode) && verifyToken.equals(token)) {
-            System.out.println("✅ Meta Webhook Verified Successfully!");
+            log.info("Meta WhatsApp webhook verified");
             return ResponseEntity.ok(challenge);
-        } else {
-            return ResponseEntity.status(403).body("Verification failed");
         }
+
+        log.warn("Rejected WhatsApp webhook verification request with mode={}", mode);
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Verification failed");
     }
 
-    /**
-     * 2. POST Request: Meta sends all user messages (Hi, Location, Docs) here.
-     */
     @PostMapping
     public ResponseEntity<String> receiveMessage(
             @RequestBody String payload,
-            @RequestHeader(value = "X-Hub-Signature-256", required = false) String signatureHeader) {
-
-        // --- SECURITY CHECK ---
-        if (signatureHeader == null || signatureHeader.isEmpty()) {
-            System.out.println("⚠️ WARNING: Bypassing Security for Local Postman Testing!");
-        } else if (!securityUtils.isValidSignature(payload, signatureHeader)) {
-            System.err.println("ALERT: Invalid Signature detected!");
+            @RequestHeader(value = "X-Hub-Signature-256", required = false) String signatureHeader
+    ) {
+        if (signatureHeader == null || signatureHeader.isBlank()) {
+            log.warn("Rejected unsigned WhatsApp webhook request");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
-        // ------------------------------
 
-        // Step B: Pass payload to Background Thread (Async)
+        if (!securityUtils.isValidSignature(payload, signatureHeader)) {
+            log.warn("Rejected WhatsApp webhook request with invalid signature");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
         processorService.processIncomingMessage(payload);
-
-        // Step C: IMMEDIATELY return 200 OK to Meta (within milliseconds)
         return ResponseEntity.ok("EVENT_RECEIVED");
     }
 }

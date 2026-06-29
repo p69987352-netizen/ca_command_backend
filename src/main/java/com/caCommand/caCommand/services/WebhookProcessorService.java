@@ -1,6 +1,7 @@
 package com.caCommand.caCommand.services;
 
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
@@ -9,68 +10,71 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class WebhookProcessorService {
 
-    private final ObjectMapper objectMapper;
-    private final ChatBotService chatBotService; // 🌟 ADDED: ChatBotService injection
+    private static final Logger log = LoggerFactory.getLogger(WebhookProcessorService.class);
 
-    // Constructor Injection
+    private final ObjectMapper objectMapper;
+    private final ChatBotService chatBotService;
+
     public WebhookProcessorService(ChatBotService chatBotService) {
         this.objectMapper = new ObjectMapper();
         this.chatBotService = chatBotService;
     }
 
+    private final java.util.Set<String> processedMessageIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     @Async
     public void processIncomingMessage(String payload) {
         try {
-            System.out.println("--- Async Thread Started ---");
-
-            // String JSON ko Object Tree mein convert karna
             JsonNode rootNode = objectMapper.readTree(payload);
+            JsonNode valueNode = rootNode.path("entry").path(0).path("changes").path(0).path("value");
 
-            // Navigate deep into the Meta JSON structure
-            JsonNode entryNode = rootNode.path("entry").get(0);
-            JsonNode changesNode = entryNode.path("changes").get(0);
-            JsonNode valueNode = changesNode.path("value");
-
-            // Meta sometimes sends status updates (like "Message Read"), we only want actual messages
-            if (valueNode.has("messages")) {
-                JsonNode messageNode = valueNode.path("messages").get(0);
-
-                String fromPhoneNumber = messageNode.path("from").asText();
-                String messageType = messageNode.path("type").asText(); // text, document, image, or location
-
-                String messageContent = "";
-
-                // 1. Handle Text
-                if ("text".equals(messageType)) {
-                    messageContent = messageNode.path("text").path("body").asText();
-                }
-                // 2. Handle Documents
-                else if ("document".equals(messageType)) {
-                    messageContent = messageNode.path("document").path("id").asText(); // Media ID
-                }
-                // 3. Handle Images
-                else if ("image".equals(messageType)) {
-                    messageContent = messageNode.path("image").path("id").asText(); // Media ID
-                }
-                // 🌟 4. Handle Location (NAYA FEATURE)
-                else if ("location".equals(messageType)) {
-                    String lat = messageNode.path("location").path("latitude").asText();
-                    String lon = messageNode.path("location").path("longitude").asText();
-                    messageContent = lat + "," + lon; // Dono ko jod kar ChatBotService ko bhejenge
-                }
-
-                System.out.println("📞 From: " + fromPhoneNumber + " | Type: " + messageType);
-                System.out.println("💬 Content/MediaID/Location: " + messageContent);
-
-                // Send to the Brain (ChatBotService)
-                chatBotService.processUserMessage(fromPhoneNumber, messageType, messageContent);
-
-            } else {
-                System.out.println("ℹ️ Not a user message (might be a status update). Ignoring.");
+            if (!valueNode.has("messages")) {
+                log.debug("Ignoring WhatsApp status webhook without user messages");
+                return;
             }
 
+            JsonNode messageNode = valueNode.path("messages").path(0);
+            String messageId = messageNode.path("id").asText();
+            
+            // Webhook Idempotency Check
+            if (messageId != null && !messageId.isBlank() && !processedMessageIds.add(messageId)) {
+                log.info("Duplicate Webhook ignored for messageId={}", messageId);
+                return;
+            }
+
+            // Simple cleanup to prevent OOM
+            if (processedMessageIds.size() > 10000) {
+                processedMessageIds.clear();
+            }
+
+            String fromPhoneNumber = messageNode.path("from").asText();
+            String messageType = messageNode.path("type").asText();
+            String messageContent = extractMessageContent(messageNode, messageType);
+
+            if (fromPhoneNumber.isBlank() || messageType.isBlank()) {
+                log.warn("Ignoring malformed WhatsApp message webhook");
+                return;
+            }
+
+            log.info("Processing WhatsApp message from={} type={} id={}", fromPhoneNumber, messageType, messageId);
+            chatBotService.processUserMessage(fromPhoneNumber, messageType, messageContent);
         } catch (Exception e) {
-            System.err.println("❌ Error parsing Meta JSON: " + e.getMessage());
+            log.error("Failed to process WhatsApp webhook payload", e);
         }
+    }
+
+    private String extractMessageContent(JsonNode messageNode, String messageType) {
+        return switch (messageType) {
+            case "text" -> messageNode.path("text").path("body").asText();
+            case "document" -> {
+                String id = messageNode.path("document").path("id").asText();
+                String filename = messageNode.path("document").path("filename").asText("");
+                yield id + "|" + filename;
+            }
+            case "image" -> messageNode.path("image").path("id").asText();
+            case "location" -> messageNode.path("location").path("latitude").asText()
+                    + "," + messageNode.path("location").path("longitude").asText();
+            default -> "";
+        };
     }
 }

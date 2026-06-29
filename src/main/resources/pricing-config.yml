@@ -1,0 +1,35 @@
+# ============================================================
+# Phorwal CA Firm - Pricing Configuration
+# Strategy: 25% less than ClearTax for all ITR forms
+# Last Updated: 2026-06-26
+# ============================================================
+
+pricing:
+  # Base prices by ITR form (in INR)
+  base-prices:
+    ITR-1: 2449    # ClearTax: 3249
+    ITR-2: 4449    # ClearTax: 5950
+    ITR-3: 6499    # ClearTax: 8750
+    ITR-4: 4449    # ClearTax: 5950
+    DEFAULT: 2449
+
+  # Complexity multipliers (applied to base price)
+  complexity-multipliers:
+    SIMPLE: 1.0     # Score 1-3
+    MODERATE: 1.25   # Score 4-6
+    COMPLEX: 1.60    # Score 7-10
+
+  # Income-level surcharge (additional flat fee)
+  income-surcharge:
+    above-1cr: 3000    # Income > 1 Crore
+    above-50l: 1500    # Income > 50 Lakh
+    above-20l: 500     # Income > 20 Lakh
+    default: 0
+
+  # Surcharge for Capital Gains lines
+  capital-gains-lines-surcharge:
+    per-10-lines: 500
+
+  # Minimum and maximum caps
+  min-fee: 1499
+  max-fee: 25000

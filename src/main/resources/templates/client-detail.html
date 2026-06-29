@@ -1,0 +1,161 @@
+ <!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout" layout:decorate="~{layout}">
+<head>
+    <title>Client Detail | Phorwal CA Firm</title>
+</head>
+<body>
+
+<main layout:fragment="content">
+    
+    <div class="d-flex justify-content-between align-items-center mb-4 px-4">
+        <div>
+            <h2 class="mb-1" style="font-family: var(--font-heading); color: var(--dark);" th:text="${client.name}">Client Name</h2>
+            <p class="text-muted mb-0"><i class="fa-solid fa-phone"></i> <span th:text="${client.phoneNumber}">+91 9999999999</span></p>
+        </div>
+        <a href="/admin/dashboard" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left"></i> Back to Dashboard</a>
+    </div>
+
+    <div class="content-wrap">
+        <div class="row g-4">
+            
+            <!-- Left Column: AIS Data & Documents -->
+            <div class="col-lg-8">
+                
+                <!-- Financial Intelligence Panel -->
+                <div class="card-table mb-4">
+                    <div class="p-3 border-bottom bg-light">
+                        <h6 class="m-0" style="color: var(--dark);"><i class="fa-solid fa-wand-magic-sparkles" style="color: var(--gold);"></i> Financial Intelligence (AIS/TIS)</h6>
+                    </div>
+                    <div class="p-4" th:if="${extractedData != null}">
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <div class="p-3 rounded bg-light border border-light">
+                                    <p class="text-uppercase text-muted small fw-bold mb-1">Salary Income</p>
+                                    <h5 class="mb-0 fw-bold" th:text="'₹ ' + ${#numbers.formatDecimal(extractedData.salaryIncome != null ? extractedData.salaryIncome : 0, 0, 'COMMA', 0, 'POINT')}">₹ 0</h5>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-3 rounded bg-light border border-light">
+                                    <p class="text-uppercase text-muted small fw-bold mb-1">Interest Income</p>
+                                    <h5 class="mb-0 fw-bold" th:text="'₹ ' + ${#numbers.formatDecimal(extractedData.interestIncome != null ? extractedData.interestIncome : 0, 0, 'COMMA', 0, 'POINT')}">₹ 0</h5>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-3 rounded bg-light border border-light">
+                                    <p class="text-uppercase text-muted small fw-bold mb-1">Dividend</p>
+                                    <h5 class="mb-0 fw-bold" th:text="'₹ ' + ${#numbers.formatDecimal(extractedData.dividendIncome != null ? extractedData.dividendIncome : 0, 0, 'COMMA', 0, 'POINT')}">₹ 0</h5>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-3 rounded" style="background: #fee2e2; border: 1px solid #fecaca;">
+                                    <p class="text-uppercase small fw-bold mb-1" style="color: #dc2626;">TDS Deducted</p>
+                                    <h5 class="mb-0 fw-bold text-danger" th:text="'₹ ' + ${#numbers.formatDecimal(extractedData.tds != null ? extractedData.tds : 0, 0, 'COMMA', 0, 'POINT')}">₹ 0</h5>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-3 rounded" style="background: #dcfce7; border: 1px solid #bbf7d0;">
+                                    <p class="text-uppercase small fw-bold mb-1" style="color: #16a34a;">Risk Score</p>
+                                    <h5 class="mb-0 fw-bold text-success" th:text="${extractedData.riskScore != null ? extractedData.riskScore : 'Low'}">Low</h5>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-3 rounded" style="background: #fef9c3; border: 1px solid #fef08a;">
+                                    <p class="text-uppercase small fw-bold mb-1" style="color: #ca8a04;">Notices</p>
+                                    <h5 class="mb-0 fw-bold text-warning" th:text="${extractedData.noticeType != null ? extractedData.noticeType : 'None'}">None</h5>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-5 text-center text-muted" th:if="${extractedData == null}">
+                        <i class="fa-solid fa-magnifying-glass fs-1 mb-3 opacity-50"></i>
+                        <p class="mb-0">No financial data extracted yet. Please upload documents for AI verification.</p>
+                    </div>
+                </div>
+
+                <!-- Multi-PDF Upload Section -->
+                <div class="card-table">
+                    <div class="p-3 border-bottom bg-light">
+                        <h6 class="m-0" style="color: var(--dark);"><i class="fa-solid fa-upload" style="color: #0284c7;"></i> Upload Documents for AI Verification</h6>
+                    </div>
+                    <div class="p-4">
+                        <form th:action="@{/admin/client/{id}/upload-multiple(id=${client.id})}" method="POST" enctype="multipart/form-data">
+                            <div class="mb-4">
+                                <label for="dropzone-file" class="d-flex flex-column align-items-center justify-content-center w-100 rounded" style="height: 180px; border: 2px dashed #cbd5e1; background: #f8fafc; cursor: pointer; transition: all 0.2s;">
+                                    <div class="text-center p-4">
+                                        <i class="fa-solid fa-cloud-arrow-up fs-2 text-muted mb-2"></i>
+                                        <p class="mb-1 text-muted"><strong style="color: var(--dark);">Click to upload</strong> or drag and drop</p>
+                                        <p class="text-muted small mb-0">Select MULTIPLE PDFs at once (PAN, Aadhar, Form 16, AIS)</p>
+                                    </div>
+                                    <input id="dropzone-file" name="files" type="file" class="d-none" multiple accept="application/pdf" required />
+                                </label>
+                            </div>
+                            <div class="text-end">
+                                <button type="submit" class="btn-action-gold px-4">
+                                    <i class="fa-solid fa-bolt"></i> Verify All Documents
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Pricing Engine -->
+            <div class="col-lg-4">
+                
+                <div class="card-table position-sticky" style="top: 2rem;">
+                    <div class="p-3 border-bottom bg-light d-flex justify-content-between align-items-center">
+                        <h6 class="m-0" style="color: var(--dark);"><i class="fa-solid fa-indian-rupee-sign" style="color: #16a34a;"></i> Pricing Engine</h6>
+                        <span class="badge badge-gold">AI Suggested</span>
+                    </div>
+                    
+                    <div class="p-4" th:if="${ticket != null}">
+                        <div class="mb-4 text-center">
+                            <p class="text-muted small text-uppercase fw-bold mb-1">Recommended Plan</p>
+                            <h3 class="mb-0 fw-bold" style="font-family: var(--font-heading); color: var(--gold);" th:text="${ticket.itrFormType != null ? ticket.itrFormType : 'ITR-1 Standard'}">ITR-1</h3>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <div class="d-flex justify-content-between text-muted mb-2">
+                                <span>Base Fee</span>
+                                <span class="text-decoration-line-through" th:text="'₹ ' + ${ticket.cardRateFee}">₹ 999</span>
+                            </div>
+                            <div class="d-flex justify-content-between fw-bold mb-3" style="color: #16a34a;">
+                                <span>Promotional Discount (<span th:text="${ticket.discountPercent}">25</span>%)</span>
+                                <span>- ₹ <span th:text="${ticket.cardRateFee - ticket.quotedFee}">250</span></span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center pt-3 border-top">
+                                <span class="fw-bold" style="color: var(--dark);">Final Price</span>
+                                <h3 class="mb-0 fw-bold" style="color: var(--dark);" th:text="'₹ ' + ${ticket.quotedFee}">₹ 749</h3>
+                            </div>
+                        </div>
+                        
+                        <button class="btn w-100 fw-bold" style="background: #16a34a; color: white; padding: 12px; border-radius: 8px;">
+                            <i class="fa-solid fa-link"></i> Generate Payment Link
+                        </button>
+                        <p class="text-center text-muted small mt-3 mb-0">Prices based on Phorwal CA standard models.</p>
+                    </div>
+                    
+                    <div class="p-5 text-center text-muted" th:if="${ticket == null}">
+                        <i class="fa-solid fa-calculator fs-1 mb-3 opacity-50"></i>
+                        <p class="mb-0">No active ticket found to generate pricing. Wait for client to initiate chat.</p>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+</main>
+
+<script>
+    // Simple file name display for multiple uploads
+    document.getElementById('dropzone-file').addEventListener('change', function(e) {
+        if(this.files && this.files.length > 0) {
+            const label = document.querySelector('label div');
+            label.innerHTML = `<i class="fa-solid fa-file-pdf fs-2 text-primary mb-2"></i><p class="mb-0 fw-bold text-primary">${this.files.length} files selected</p>`;
+        }
+    });
+</script>
+
+</body>
+</html>

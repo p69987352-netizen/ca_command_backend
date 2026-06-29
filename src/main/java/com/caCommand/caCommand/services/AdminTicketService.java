@@ -1,500 +1,917 @@
 package com.caCommand.caCommand.services;
 
+import com.caCommand.caCommand.dtos.AdminApprovalRequest;
+import com.caCommand.caCommand.dtos.DeadlineRequest;
+import com.caCommand.caCommand.dtos.NoteRequest;
+import com.caCommand.caCommand.dtos.StaffClientMessageRequest;
+import com.caCommand.caCommand.dtos.StaffProgressUpdateRequest;
+import com.caCommand.caCommand.entities.ChatSession;
+import com.caCommand.caCommand.entities.Client;
 import com.caCommand.caCommand.entities.Staff;
 import com.caCommand.caCommand.entities.Ticket;
+import com.caCommand.caCommand.enums.Priority;
+import com.caCommand.caCommand.enums.TicketStatus;
+import com.caCommand.caCommand.exceptions.InvalidTicketStateException;
+import com.caCommand.caCommand.exceptions.ResourceNotFoundException;
 import com.caCommand.caCommand.repositories.ChatSessionRepository;
+import com.caCommand.caCommand.repositories.ClientRepository;
 import com.caCommand.caCommand.repositories.StaffRepository;
 import com.caCommand.caCommand.repositories.TicketRepository;
+import com.caCommand.caCommand.repositories.PaymentHistoryRepository;
+import com.caCommand.caCommand.repositories.ClientHistoryRepository;
+import com.caCommand.caCommand.entities.PaymentHistory;
+import com.caCommand.caCommand.entities.ClientHistory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Service
 public class AdminTicketService {
+
+    private static final Logger log = LoggerFactory.getLogger(AdminTicketService.class);
+    private static final List<String> STAFF_ACTIVE_STATUSES = List.of(
+            TicketStatus.ASSIGNED_TO_STAFF.name(),
+            TicketStatus.PENDING_ADMIN_QC.name()
+    );
 
     private final TicketRepository ticketRepository;
     private final StaffRepository staffRepository;
     private final ChatSessionRepository chatSessionRepository;
     private final WhatsAppMessageSender whatsappMessageSender;
+    private final ClientRepository clientRepository;
+    private final PaymentHistoryRepository paymentHistoryRepository;
+    private final ClientHistoryRepository clientHistoryRepository;
+    private final org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
+    private final S3StorageService s3StorageService;
 
-    // ==========================================
-    // 📌 CONSTRUCTOR
-    // ==========================================
-    public AdminTicketService(TicketRepository ticketRepository,
-                              StaffRepository staffRepository,
-                              ChatSessionRepository chatSessionRepository,
-                              WhatsAppMessageSender whatsappMessageSender) {
+    @org.springframework.beans.factory.annotation.Value("${payment.qr.url:}")
+    private String paymentQrUrl;
+
+    public AdminTicketService(
+            TicketRepository ticketRepository,
+            StaffRepository staffRepository,
+            ChatSessionRepository chatSessionRepository,
+            WhatsAppMessageSender whatsappMessageSender,
+            ClientRepository clientRepository,
+            PaymentHistoryRepository paymentHistoryRepository,
+            ClientHistoryRepository clientHistoryRepository,
+            org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate,
+            S3StorageService s3StorageService
+    ) {
         this.ticketRepository = ticketRepository;
         this.staffRepository = staffRepository;
         this.chatSessionRepository = chatSessionRepository;
         this.whatsappMessageSender = whatsappMessageSender;
+        this.clientRepository = clientRepository;
+        this.paymentHistoryRepository = paymentHistoryRepository;
+        this.clientHistoryRepository = clientHistoryRepository;
+        this.messagingTemplate = messagingTemplate;
+        this.s3StorageService = s3StorageService;
     }
 
-    // ==========================================
-    // 👥 STAFF MANAGEMENT
-    // ==========================================
+    private void broadcastUpdate() {
+        if (messagingTemplate != null) {
+            messagingTemplate.convertAndSend("/topic/updates", (Object) Map.of("type", "TICKET_UPDATE", "timestamp", System.currentTimeMillis()));
+        }
+    }
+
+    private Ticket saveAndBroadcast(Ticket ticket) {
+        Ticket saved = ticketRepository.save(ticket);
+        broadcastUpdate();
+        return saved;
+    }
+
     public List<Staff> getAllStaff() {
         return staffRepository.findAll();
     }
 
     @Transactional
     public Staff addNewStaff(Staff staff) {
-        staff.setCreatedAt(LocalDateTime.now());
+        staffRepository.findByPhoneNumber(staff.getPhoneNumber()).ifPresent(existing -> {
+            throw new InvalidTicketStateException("A staff member already exists with this phone number");
+        });
+
         Staff savedStaff = staffRepository.save(staff);
-
-        String welcomeMsg = formatMessage(
-                "🎉 *WELCOME TO CA COMMAND CENTER*",
-                "Hello *" + staff.getName() + "*, you have been successfully registered as a Staff Member.",
-                "",
-                "📋 *Your Responsibilities:*",
-                "• Process client files assigned by Admin",
-                "• Communicate with clients if documents are missing",
-                "• Submit completed work for Quality Check",
-                "",
-                "💡 *Important Commands:*",
-                "• Type *STATUS* - View your active files",
-                "• Type *HELP* - Get command list",
-                "",
-                "You will receive WhatsApp notifications whenever Admin assigns a new client file to you. Stay ready! 💼"
-        );
-
-        whatsappMessageSender.sendMessage(savedStaff.getPhoneNumber(), welcomeMsg);
-        System.out.println("✅ New staff added: " + staff.getName() + " (" + staff.getPhoneNumber() + ")");
-
+        whatsappMessageSender.sendMessage(savedStaff.getPhoneNumber(),
+                "Welcome to CA Command Center. You have been registered as a staff member.");
+        log.info("Added staff member id={} phone={}", savedStaff.getId(), savedStaff.getPhoneNumber());
         return savedStaff;
     }
 
-
-
-    public Optional<Staff> getStaffById(UUID staffId) {
-        return staffRepository.findById(staffId);
+    public Optional<Staff> getStaffById(String staffIdentifier) {
+        try {
+            return Optional.of(resolveStaff(staffIdentifier));
+        } catch (Exception e) {
+            return Optional.empty();
+        }
     }
 
-    public void removeStaff(UUID staffId) {
-        staffRepository.deleteById(staffId);
-        System.out.println("🗑️ Staff removed: " + staffId);
+    @Transactional
+    public void sendReminderToClient(String ticketId, String customMessage) {
+        Ticket ticket = ticketRepository.findById(UUID.fromString(ticketId))
+                .orElseThrow(() -> new ResourceNotFoundException("Ticket not found"));
+        
+        Client client = ticket.getClient();
+        if (client != null && client.getPhoneNumber() != null) {
+            String missingDocsMsg = "";
+            
+            if (customMessage != null && !customMessage.isBlank()) {
+                missingDocsMsg = customMessage;
+            } else {
+                missingDocsMsg = "Kripya jaldi se pending documents ki clear photo ya PDF yahin WhatsApp par bhejein.";
+                ChatSession session = chatSessionRepository.findById(client.getPhoneNumber()).orElse(null);
+                if (session != null) {
+                    List<String> required = GeminiService.SERVICE_DOCUMENTS.get(ticket.getServiceType());
+                    if (required != null) {
+                        List<String> received = new ArrayList<>();
+                        if (session.getVerifiedDocumentTypes() != null && !session.getVerifiedDocumentTypes().isBlank()) {
+                            received.addAll(Arrays.asList(session.getVerifiedDocumentTypes().split(",")));
+                        }
+                        List<String> missing = new ArrayList<>();
+                        for (String req : required) {
+                            if (!received.contains(req)) {
+                                missing.add(req);
+                            }
+                        }
+                        if (!missing.isEmpty()) {
+                            StringBuilder bulletList = new StringBuilder("Missing Documents:\n");
+                            for (String m : missing) {
+                                bulletList.append("• ").append(m).append("\n");
+                            }
+                            missingDocsMsg = "Pending Documents ki list neeche hai. Kripya jaldi se unki clear photo ya PDF yahin WhatsApp par bhejein.\n\n" + bulletList.toString();
+                        }
+                    }
+                }
+            }
+
+            whatsappMessageSender.sendMessage(client.getPhoneNumber(),
+                    "🔔 *Reminder from Phorwal CA Firm*\n\n" +
+                    "Aapki " + ticket.getServiceType() + " file ke liye kuch required documents abhi tak pending hain ya verification baki hai.\n\n" +
+                    missingDocsMsg + "\n\nTaaki hum aapka kaam aage badha sakein. 🙏");
+        }
+    }
+    @Transactional
+    public void removeStaff(String staffIdentifier) {
+        Staff staff = resolveStaff(staffIdentifier);
+        staffRepository.deleteById(staff.getId());
+        log.info("Removed staff member id={}", staff.getId());
     }
 
-    // ==========================================
-    // 📊 TICKET FETCHING (Read-Only Operations)
-    // ==========================================
     public List<Ticket> getAllTickets() {
         return ticketRepository.findAll();
     }
 
     public List<Ticket> getPendingTickets() {
-        return ticketRepository.findByStatus("PENDING_ADMIN_APPROVAL");
+        return ticketRepository.findByStatus(TicketStatus.PENDING_ADMIN_APPROVAL.name());
     }
 
     public List<Ticket> getInProgressTickets() {
-        return ticketRepository.findByStatus("IN_PROGRESS")
-                .stream()
-                .filter(t -> t.getAssignedStaff() != null)
-                .collect(Collectors.toList());
+        return ticketRepository.findByStatus(TicketStatus.IN_PROGRESS.name());
+    }
+
+    public String getPresignedDocumentUrl(String ticketId) {
+        Ticket ticket = ticketRepository.findById(java.util.UUID.fromString(ticketId)).orElseThrow(() -> new RuntimeException("Ticket not found"));
+        String raw = ticket.getStaffSubmittedDocument();
+        if (raw != null && raw.startsWith("s3://")) {
+            return s3StorageService.getSignedUrl(raw);
+        }
+        return raw;
     }
 
     public List<Ticket> getAwaitingPaymentTickets() {
-        return ticketRepository.findByStatus("AWAITING_PAYMENT");
+        return ticketRepository.findByStatus(TicketStatus.AWAITING_PAYMENT.name());
+    }
+
+    public List<Ticket> getPaidTickets() {
+        List<Ticket> paymentReceived = ticketRepository.findByStatus(TicketStatus.PAYMENT_RECEIVED.name());
+        List<Ticket> inProgress = ticketRepository.findByStatus(TicketStatus.IN_PROGRESS.name());
+        List<Ticket> combined = new java.util.ArrayList<>(paymentReceived);
+        combined.addAll(inProgress);
+        return combined;
     }
 
     public List<Ticket> getQCPendingTickets() {
-        return ticketRepository.findByStatus("PENDING_ADMIN_QC");
+        return ticketRepository.findByStatus(TicketStatus.PENDING_ADMIN_QC.name());
     }
+
     public List<Ticket> getCompletedTickets() {
-        // 'FINISHED' ko change karke 'COMPLETED' kar diya
-        return ticketRepository.findByStatus("COMPLETED");
+        return ticketRepository.findByStatus(TicketStatus.FINISHED.name());
     }
 
-    public List<Ticket> getInProgressTicketsForStaff(UUID staffId) {
-        return ticketRepository.findAll().stream()
-                .filter(t -> t.getAssignedStaff() != null
-                        && t.getAssignedStaff().getId().equals(staffId)
-                        && ("ASSIGNED_TO_STAFF".equals(t.getStatus())
-                        || "PENDING_ADMIN_QC".equals(t.getStatus())))
-                .collect(Collectors.toList());
+    public List<Ticket> getInProgressTicketsForStaff(String staffIdentifier) {
+        Staff staff = resolveStaff(staffIdentifier);
+        return ticketRepository.findByAssignedStaffIdAndStatusIn(staff.getId(), STAFF_ACTIVE_STATUSES);
     }
 
-    public Optional<Ticket> getTicketById(UUID ticketId) {
-        return ticketRepository.findById(ticketId);
+    public List<Ticket> getWorkQueueForStaff(String staffIdentifier) {
+        Staff staff = resolveStaff(staffIdentifier);
+        return ticketRepository.findByAssignedStaffIdAndStatusIn(staff.getId(), STAFF_ACTIVE_STATUSES);
     }
 
-    // ==========================================
-    // ✅ TICKET APPROVAL & FEE SETTING
-    // ==========================================
-    @Transactional
-    public Ticket approveTicketAndSetFee(UUID ticketId, com.caCommand.caCommand.dtos.AdminApprovalRequest request) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("❌ Ticket not found: " + ticketId));
-
-        if (!"PENDING_ADMIN_APPROVAL".equals(ticket.getStatus())) {
-            throw new RuntimeException("⚠️ Ticket is not pending approval. Current status: " + ticket.getStatus());
+    public Optional<Ticket> getTicketById(String ticketId) {
+        try {
+            return Optional.of(resolveTicket(ticketId));
+        } catch (Exception e) {
+            return Optional.empty();
         }
+    }
 
-        ticket.setStatus("AWAITING_PAYMENT");
-        ticket.setQuotedFee(request.getFeeAmount().doubleValue());
-        ticket.setUpdatedAt(LocalDateTime.now());
+    public Ticket resolveTicket(String identifier) {
+        try {
+            UUID id = UUID.fromString(identifier);
+            return getRequiredTicket(id);
+        } catch (IllegalArgumentException e) {
+            String phone = identifier.replaceAll("[^0-9]", "");
+            if (phone.length() < 10) {
+                throw new ResourceNotFoundException("Invalid identifier or phone number: " + identifier);
+            }
+            List<Ticket> tickets = ticketRepository.findByClientPhoneNumber(phone);
+            if (tickets.isEmpty()) {
+                throw new ResourceNotFoundException("No ticket found for client phone: " + phone);
+            }
+            return tickets.stream()
+                    .filter(t -> !TicketStatus.FINISHED.name().equals(t.getStatus()))
+                    .findFirst()
+                    .orElse(tickets.get(0));
+        }
+    }
 
-        Ticket updatedTicket = ticketRepository.save(ticket);
+    @Transactional
+    public Ticket approveTicketAndSetFee(String ticketId, AdminApprovalRequest request) {
+        Ticket ticket = resolveTicket(ticketId);
+        requireStatus(ticket, TicketStatus.PENDING_ADMIN_APPROVAL);
 
-        // 📱 Send payment request to client
-        String clientMsg = formatMessage(
-                "✅ *DOCUMENTS VERIFIED & APPROVED*",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "Namaste! Your documents have been verified by our CA team.",
+        ticket.setStatus(TicketStatus.AWAITING_PAYMENT.name());
+        ticket.setQuotedFee(request.getFeeAmount());
+        ticket.setAdminNotes(request.getAdminNotes());
+
+        if (request.getOverrideReason() != null && !request.getOverrideReason().isBlank()) {
+            ticket.setAdminFinalFee(request.getFeeAmount());
+            ticket.setAdminOverrideReason(request.getOverrideReason());
+            ticket.setOverriddenBy(request.getOverriddenBy() != null ? request.getOverriddenBy() : "Admin");
+            ticket.setOverriddenAt(LocalDateTime.now());
+        }
+        
+        ticket.setPaymentStatus("PAYMENT_PENDING");
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        String messageBody = formatMessage(
+                "dY'3 *PAYMENT REQUESTED*",
+                "Service: " + ticket.getServiceType(),
+                "Fee: Rs. " + String.format("%.2f", request.getFeeAmount()),
                 "",
-                "📋 *Service:* " + ticket.getServiceType(),
-                "💰 *Quoted Fee:* ₹" + String.format("%.2f", request.getFeeAmount()),
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "💳 *PAYMENT METHODS:*",
-                "",
-                "1️⃣ *PhonePe/GPay/Paytm:*",
-                "Scan this QR Code:",
-                "🔗 https://dummyimage.com/300x300/4CAF50/fff&text=PhonePe+QR",
-                "",
-                "2️⃣ *Bank Transfer:*",
-                "• A/C: 1234567890",
-                "• IFSC: SBIN0001234",
-                "• Name: CA Command Services",
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "⚡ *After Payment:*",
-                "Reply with *'PAID'* or send payment screenshot.",
-                "",
-                "We will verify and start processing your file immediately! 🚀"
+                "Kripya niche diye gaye QR code ka use karke payment karein.",
+                "Payment complete hone ke baad, please apna Screenshot ya UTR number yahan reply mein bhejein taaki hum verify karke process aage badha sakein."
         );
 
-        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), clientMsg);
+        if (paymentQrUrl != null && !paymentQrUrl.isBlank()) {
+            whatsappMessageSender.sendImageMessage(ticket.getClient().getPhoneNumber(), paymentQrUrl, messageBody);
+        } else {
+            // Fallback just in case URL isn't set
+            whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), messageBody);
+        }
 
-        System.out.println("💰 Fee set for Ticket " + ticketId + ": ₹" + request.getFeeAmount());
-
+        log.info("Requested payment for ticket id={} quotedFee={}", ticketId, request.getFeeAmount());
         return updatedTicket;
     }
 
-    // Legacy method support (backward compatibility)
-    public Ticket approveTicket(UUID ticketId, Integer feeAmount) {
-        com.caCommand.caCommand.dtos.AdminApprovalRequest request =
-                new com.caCommand.caCommand.dtos.AdminApprovalRequest();
+    public Ticket approveTicket(String ticketId, Integer feeAmount) {
+        AdminApprovalRequest request = new AdminApprovalRequest();
         request.setFeeAmount(feeAmount.doubleValue());
         return approveTicketAndSetFee(ticketId, request);
     }
 
-    // ==========================================
-    // 💳 PAYMENT VERIFICATION
-    // ==========================================
     @Transactional
-    public Ticket markPaymentSuccessful(UUID ticketId) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("❌ Ticket not found: " + ticketId));
+    public Ticket markPaymentSuccessful(String ticketId) {
+        Ticket ticket = resolveTicket(ticketId);
 
-        // 🌟 NAYA STATUS CHECK
-        if (!"PAYMENT_RECEIVED".equals(ticket.getStatus()) && !"AWAITING_PAYMENT".equals(ticket.getStatus())) {
-            throw new RuntimeException("⚠️ Ticket is not awaiting payment. Current status: " + ticket.getStatus());
+        if (!TicketStatus.PAYMENT_RECEIVED.name().equals(ticket.getStatus())
+                && !TicketStatus.AWAITING_PAYMENT.name().equals(ticket.getStatus())
+                && !TicketStatus.PAYMENT_VERIFICATION_PENDING.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException(
+                    "Ticket is not awaiting payment. Current status: " + ticket.getStatus());
         }
 
-        ticket.setStatus("IN_PROGRESS");
-        ticket.setUpdatedAt(LocalDateTime.now());
+        ticket.setStatus(TicketStatus.IN_PROGRESS.name());
+        ticket.setPaymentStatus("PAID");
+        ticket.setPaymentCompletedAt(LocalDateTime.now());
+        Ticket updatedTicket = saveAndBroadcast(ticket);
 
-        Ticket updatedTicket = ticketRepository.save(ticket);
+        PaymentHistory ph = new PaymentHistory();
+        ph.setClient(ticket.getClient());
+        ph.setTicket(ticket);
+        ph.setAmount(ticket.getQuotedFee());
+        ph.setPaymentLink(ticket.getPaymentLink());
+        ph.setStatus("SUCCESS");
+        ph.setTransactionReference(ticket.getPaymentReferenceId());
+        ph.setPaidAt(LocalDateTime.now());
+        paymentHistoryRepository.save(ph);
 
-        String clientMsg = formatMessage(
-                "🎉 *PAYMENT VERIFIED SUCCESSFULLY*",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "Thank you for the payment!",
-                "",
-                "✅ Amount Received: ₹" + String.format("%.2f", ticket.getQuotedFee()),
-                "📋 Service: " + ticket.getServiceType(),
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "👨‍💼 *NEXT STEPS:*",
-                "Our expert CA team has officially started working on your file.",
-                "",
-                "You will receive updates at key milestones.",
-                "Expected completion: 3-5 business days",
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "💬 Need help? Reply anytime - we're here! 🙌"
-        );
+        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), formatMessage(
+                "Payment verified successfully.",
+                "Service: " + ticket.getServiceType(),
+                "Our team has started processing your file."
+        ));
 
-        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), clientMsg);
-
-        System.out.println("✅ Payment verified for Ticket: " + ticketId);
-
+        log.info("Payment marked successful for ticket id={}", ticketId);
         return updatedTicket;
     }
 
-    // Legacy support
-    public Ticket verifyPayment(UUID ticketId) {
+    @Transactional
+    public Ticket rejectPaymentProof(String ticketId) {
+        Ticket ticket = resolveTicket(ticketId);
+
+        if (!TicketStatus.PAYMENT_VERIFICATION_PENDING.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException(
+                    "Ticket is not pending payment verification. Current status: " + ticket.getStatus());
+        }
+
+        ticket.setStatus(TicketStatus.AWAITING_PAYMENT.name());
+        ticket.setPaymentProofUrl(null);
+        ticket.setPaymentReferenceId(null);
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), formatMessage(
+                "dY\"t *PAYMENT VERIFICATION FAILED*",
+                "Sorry, hum aapki payment verify nahi kar paaye.",
+                "Kripya dobara payment screenshot ya UTR number check karke bhejein."
+        ));
+
+        log.info("Payment rejected for ticket id={}", ticketId);
+        return updatedTicket;
+    }
+
+    public Ticket verifyPayment(String ticketId) {
         return markPaymentSuccessful(ticketId);
     }
 
-    // ==========================================
-    // 👷 STAFF ASSIGNMENT
-    // ==========================================
     @Transactional
-    public Ticket assignToStaff(UUID ticketId, UUID staffId, String priority, String notes) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("❌ Ticket not found: " + ticketId));
+    public Ticket assignToStaff(String ticketId, String staffIdentifier, String priority, String notes) {
+        Ticket ticket = resolveTicket(ticketId);
+        Staff staff = resolveStaff(staffIdentifier);
 
-        Staff staff = staffRepository.findById(staffId)
-                .orElseThrow(() -> new RuntimeException("❌ Staff not found: " + staffId));
+        requireStatus(ticket, TicketStatus.IN_PROGRESS);
 
-        if (!"IN_PROGRESS".equals(ticket.getStatus())) {
-            throw new RuntimeException("⚠️ Ticket must be IN_PROGRESS before assignment. Current: " + ticket.getStatus());
-        }
-
+        String normalizedPriority = Priority.normalize(priority);
         ticket.setAssignedStaff(staff);
-        ticket.setStatus("ASSIGNED_TO_STAFF");
-        ticket.setPriority(priority != null ? priority : "MEDIUM");
+        ticket.setStatus(TicketStatus.ASSIGNED_TO_STAFF.name());
+        ticket.setPriority(normalizedPriority);
         ticket.setAdminNotes(notes);
-        ticket.setUpdatedAt(LocalDateTime.now());
+        ticket.setProgressPercent(10);
 
-        Ticket updatedTicket = ticketRepository.save(ticket);
+        Ticket updatedTicket = saveAndBroadcast(ticket);
 
-        // 📱 Notify client about assignment
-        String clientNotice = formatMessage(
-                "💼 *YOUR FILE HAS BEEN ASSIGNED*",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "Good news! Our expert *" + staff.getName() + "* is now handling your case.",
-                "",
-                "📋 Service: " + ticket.getServiceType(),
-                "⏰ Status: Work in Progress",
-                "",
-                "They may contact you directly if any additional documents are needed.",
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "💡 Sit back and relax - we've got this! ✨"
-        );
-        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), clientNotice);
+        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), formatMessage(
+                "Your file has been assigned.",
+                "Service: " + ticket.getServiceType(),
+                "Assigned staff: " + staff.getName()
+        ));
 
-        // 📱 Send detailed work assignment to staff
-        String documentsSection = formatDocumentList(ticket.getClientDocuments());
+        String aisPdfLink = ticket.getAisPdfPath() != null ? "\n📄 *AIS/TIS Report:* http://localhost:5001/api/admin/tickets/" + ticketId + "/download-pdf" : "";
 
-        String staffMsg = formatMessage(
-                "💼 *NEW CLIENT FILE ASSIGNED*",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "📌 *TASK DETAILS:*",
-                "• *Service:* 🛠️ " + ticket.getServiceType(),
-                "• *Priority:* " + getPriorityEmoji(priority) + " " + priority.toUpperCase(),
-                "• *Status:* ⏳ " + ticket.getStatus().replace("_", " "),
-                "• *Fee Charged:* ₹" + String.format("%.2f", ticket.getQuotedFee()),
+        whatsappMessageSender.sendMessage(staff.getPhoneNumber(), formatMessage(
+                "🔔 *NEW CLIENT ASSIGNMENT*",
+                "Aapko ek naya client assign hua hai. Kripya inhe jald se jald call karein aur inka kaam shuru karein.",
                 "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "👤 *CLIENT INFO:*",
-                "• *Phone:* " + ticket.getClient().getPhoneNumber(),
-                "  (Direct WhatsApp: https://wa.me/" + ticket.getClient().getPhoneNumber() + ")",
-                "• *City:* 📍 " + (ticket.getClient().getCity() != null ? ticket.getClient().getCity() : "Not provided"),
+                "👤 *Client Details:*",
+                "Phone: +" + ticket.getClient().getPhoneNumber(),
+                "Service: " + ticket.getServiceType(),
+                "City: " + nullToDefault(ticket.getClient().getCity(), "Not provided"),
+                "Priority: " + normalizedPriority,
+                aisPdfLink,
                 "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "📂 *CLIENT DOCUMENTS:*",
-                documentsSection,
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "📝 *ADMIN INSTRUCTIONS:*",
-                notes != null && !notes.trim().isEmpty()
-                        ? "👉 " + notes
-                        : "✅ Process according to standard guidelines",
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "🤖 *QUICK COMMANDS:*",
-                "• *STATUS* - Refresh file status",
-                "• *REQUEST: [Doc Name]* - Ask client for missing document",
-                "• *QUERY: [Question]* - Ask client a question",
-                "• *SUBMIT* - Upload final work for QC",
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "⚡ Start working now! Time is ticking ⏰"
-        );
+                "📝 *Admin Notes:* " + nullToDefault(notes, "Process according to standard guidelines")
+        ));
 
-        whatsappMessageSender.sendMessage(staff.getPhoneNumber(), staffMsg);
+        log.info("Assigned ticket id={} to staff id={} priority={}", ticketId, staffIdentifier, normalizedPriority);
+        return updatedTicket;
+    }
 
-        System.out.println("👷 Ticket " + ticketId + " assigned to " + staff.getName());
+    @Transactional
+    public Ticket reassignToStaff(String ticketId, String staffIdentifier, String notes) {
+        Ticket ticket = resolveTicket(ticketId);
+        Staff staff = resolveStaff(staffIdentifier);
+
+        Staff previousStaff = ticket.getAssignedStaff();
+        ticket.setAssignedStaff(staff);
+        ticket.setStatus(TicketStatus.ASSIGNED_TO_STAFF.name());
+        ticket.setAdminNotes(appendLog(ticket.getAdminNotes(), notes));
+        ticket.setRevisionNotes(appendLog(ticket.getRevisionNotes(), "Reassigned to " + staff.getName() + ". " + nullToDefault(notes, "")));
+        ticket.setProgressPercent(60);
+
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        whatsappMessageSender.sendMessage(staff.getPhoneNumber(), formatMessage(
+                "File reassigned to you for review/correction.",
+                "Client: " + ticket.getClient().getPhoneNumber(),
+                "Service: " + ticket.getServiceType(),
+                "Client documents:",
+                formatDocumentList(ticket.getClientDocuments()),
+                "",
+                "Previous staff work:",
+                ticket.getStaffSubmittedDocument() != null ? s3StorageService.getSignedUrl(ticket.getStaffSubmittedDocument()) : "No previous final work link available.",
+                "",
+                "Admin note:",
+                nullToDefault(notes, "Please cross-check and resubmit final work.")
+        ));
+
+        if (previousStaff != null && !previousStaff.getId().equals(staff.getId())) {
+            whatsappMessageSender.sendMessage(previousStaff.getPhoneNumber(), "Ticket " + ticket.getId() + " has been reassigned for additional review.");
+        }
 
         return updatedTicket;
     }
 
-    // ==========================================
-    // 📤 STAFF WORK SUBMISSION FOR QC
-    // ==========================================
     @Transactional
-    public Ticket submitWorkForQC(UUID ticketId, String documentUrl) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("❌ Ticket not found: " + ticketId));
+    public Ticket sendAdminNote(String ticketId, NoteRequest request) {
+        Ticket ticket = resolveTicket(ticketId);
+        String recipient = request.recipient().trim().toUpperCase();
+        String note = request.note().trim();
 
-        if (!"ASSIGNED_TO_STAFF".equals(ticket.getStatus())) {
-            throw new RuntimeException("⚠️ Only assigned tickets can submit work. Current: " + ticket.getStatus());
+        switch (recipient) {
+            case "CLIENT" -> {
+                whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), "Note from Phorwal CA Firm:\n" + note);
+                ticket.setClientRequestLog(appendLog(ticket.getClientRequestLog(), "ADMIN_NOTE_TO_CLIENT: " + note));
+            }
+            case "STAFF" -> {
+                if (ticket.getAssignedStaff() == null) {
+                    throw new InvalidTicketStateException("Ticket has no assigned staff member");
+                }
+                whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(), "Admin note:\n" + note);
+                ticket.setAdminStaffMessage(appendLog(ticket.getAdminStaffMessage(), note));
+            }
+            default -> throw new IllegalArgumentException("Recipient must be CLIENT or STAFF");
         }
 
-        ticket.setStaffSubmittedDocument(documentUrl);
-        ticket.setStatus("PENDING_ADMIN_QC");
-        ticket.setUpdatedAt(LocalDateTime.now());
+        return saveAndBroadcast(ticket);
+    }
 
-        Ticket updatedTicket = ticketRepository.save(ticket);
+    @Transactional
+    public Ticket submitWorkForQC(String ticketId, String documentUrl) {
+        Ticket ticket = resolveTicket(ticketId);
+        requireStatus(ticket, TicketStatus.ASSIGNED_TO_STAFF);
 
-        System.out.println("📤 Work submitted for QC - Ticket: " + ticketId);
+        if (documentUrl == null || documentUrl.isBlank()) {
+            throw new IllegalArgumentException("Document URL is required");
+        }
 
+        ticket.setStaffSubmittedDocument(documentUrl.trim());
+        ticket.setStatus(TicketStatus.PENDING_ADMIN_QC.name());
+        ticket.setProgressPercent(90);
+        ticket.setStaffUpdate(appendLog(ticket.getStaffUpdate(), "Final work submitted for admin QC."));
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        log.info("Submitted ticket id={} for admin QC", ticketId);
         return updatedTicket;
     }
 
-    // ==========================================
-    // 🎉 FINAL DELIVERY & TICKET CLOSURE
-    // ==========================================
     @Transactional
-    public Ticket approveAndDeliver(UUID ticketId, String closingMessage) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("❌ Ticket not found: " + ticketId));
-
-        if (!"PENDING_ADMIN_QC".equals(ticket.getStatus()) && !"ASSIGNED_TO_STAFF".equals(ticket.getStatus())) {
-            throw new RuntimeException("⚠️ Ticket not ready for delivery. Current: " + ticket.getStatus());
+    public Ticket approveAndDeliver(String ticketId, String closingMessage) {
+        Ticket ticket = resolveTicket(ticketId);
+        if (!TicketStatus.PENDING_ADMIN_QC.name().equals(ticket.getStatus())
+                && !TicketStatus.ASSIGNED_TO_STAFF.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException("Ticket is not ready for delivery. Current status: " + ticket.getStatus());
         }
 
-        ticket.setStatus("FINISHED");
-        ticket.setUpdatedAt(LocalDateTime.now());
+        ticket.setStatus(TicketStatus.FINISHED.name());
         ticket.setCompletedAt(LocalDateTime.now());
+        ticket.setDeliveredAt(LocalDateTime.now());
+        ticket.setProgressPercent(100);
 
-        Ticket finishedTicket = ticketRepository.save(ticket);
+        Ticket finishedTicket = saveAndBroadcast(ticket);
+        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), formatMessage(
+                "Work completed and delivered.",
+                "Service: " + ticket.getServiceType(),
+                "Message: " + nullToDefault(closingMessage, "Your work has been completed as per requirements."),
+                "Final document: " + (ticket.getStaffSubmittedDocument() != null ? s3StorageService.getSignedUrl(ticket.getStaffSubmittedDocument()) : "Contact support for final document link.")
+        ));
 
-        // 📱 Send completion message to client
-        String clientFinalMessage = formatMessage(
-                "🎉 *WORK SUCCESSFULLY COMPLETED*",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "Congratulations! Your work is ready! 🎊",
-                "",
-                "📋 *Service:* " + ticket.getServiceType(),
-                "✅ *Status:* Completed & Delivered",
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "💬 *Message from CA Team:*",
-                closingMessage != null ? closingMessage : "Your work has been completed as per requirements.",
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "📎 *YOUR FINAL DOCUMENTS:*",
-                ticket.getStaffSubmittedDocument() != null
-                        ? "🔗 " + ticket.getStaffSubmittedDocument()
-                        : "❌ No document link available (contact support)",
-                "",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                "⭐ *FEEDBACK REQUEST:*",
-                "How was your experience? Reply with:",
-                "• *EXCELLENT* ⭐⭐⭐⭐⭐",
-                "• *GOOD* ⭐⭐⭐⭐",
-                "• *AVERAGE* ⭐⭐⭐",
-                "",
-                "Thank you for choosing CA Command! 🙏",
-                "Need more services? Just say *HI* anytime! 😊"
-        );
-
-        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), clientFinalMessage);
-
-        // 📱 Appreciate staff member
         if (ticket.getAssignedStaff() != null) {
-            String staffAppreciation = formatMessage(
-                    "🌟 *TASK SUCCESSFULLY CLOSED*",
-                    "━━━━━━━━━━━━━━━━━━━━━━━━",
-                    "Excellent work, *" + ticket.getAssignedStaff().getName() + "*! 👏",
-                    "",
-                    "✅ The ticket for client *" + ticket.getClient().getPhoneNumber() + "* has been successfully delivered and closed.",
-                    "",
-                    "📋 Service: " + ticket.getServiceType(),
-                    "💰 Fee: ₹" + String.format("%.2f", ticket.getQuotedFee()),
-                    "",
-                    "━━━━━━━━━━━━━━━━━━━━━━━━",
-                    "Keep up the great work! 💪",
-                    "Ready for the next challenge? 🚀"
-            );
-            whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(), staffAppreciation);
+            whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(),
+                    "Ticket closed successfully for client " + ticket.getClient().getPhoneNumber());
         }
 
-        // 🧹 Clear chat session
-        chatSessionRepository.findById(ticket.getClient().getPhoneNumber()).ifPresent(session -> {
-            chatSessionRepository.delete(session);
-            System.out.println("🧹 Chat session cleared for: " + ticket.getClient().getPhoneNumber());
-        });
-
-        System.out.println("🎉 Ticket completed: " + ticketId);
-
+        chatSessionRepository.deleteById(ticket.getClient().getPhoneNumber());
+        log.info("Delivered and closed ticket id={}", ticketId);
         return finishedTicket;
     }
 
-    // Legacy support
-    public Ticket completeTicketAndDeliver(UUID ticketId, String finalDocumentUrl, String closingMessage) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new RuntimeException("❌ Ticket not found"));
-
-        if (finalDocumentUrl != null && !finalDocumentUrl.trim().isEmpty()) {
-            ticket.setStaffSubmittedDocument(finalDocumentUrl);
-            ticketRepository.save(ticket);
+    @Transactional
+    public Ticket setDeadline(String ticketId, DeadlineRequest request) {
+        Ticket ticket = resolveTicket(ticketId);
+        ticket.setDeadlineAt(request.deadlineAt());
+        if (request.priority() != null && !request.priority().isBlank()) {
+            ticket.setPriority(Priority.normalize(request.priority()));
+        }
+        if (request.note() != null && !request.note().isBlank()) {
+            ticket.setAdminNotes(appendLog(ticket.getAdminNotes(), request.note()));
         }
 
-        return approveAndDeliver(ticketId, closingMessage);
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), formatMessage(
+                "Your work timeline has been updated.",
+                "Service: " + ticket.getServiceType(),
+                "Expected delivery: " + ticket.getDeadlineAt(),
+                "Priority: " + ticket.getPriority(),
+                "",
+                "Urgent requirement ho to yahin reply karein. Team priority/fees accordingly confirm karegi."
+        ));
+
+        if (ticket.getAssignedStaff() != null) {
+            whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(), formatMessage(
+                    "Deadline updated for assigned file.",
+                    "Client: " + ticket.getClient().getPhoneNumber(),
+                    "Service: " + ticket.getServiceType(),
+                    "Deadline: " + ticket.getDeadlineAt(),
+                    "Priority: " + ticket.getPriority()
+            ));
+        }
+
+        return updatedTicket;
     }
 
-    // ==========================================
-    // 🛠️ UTILITY HELPER METHODS
-    // ==========================================
+    @Transactional
+    public Ticket askStaffForUpdate(String ticketId, String adminMessage) {
+        Ticket ticket = resolveTicket(ticketId);
+        if (ticket.getAssignedStaff() == null) {
+            throw new InvalidTicketStateException("Ticket has no assigned staff member");
+        }
 
-    /**
-     * Format message with proper line breaks
-     */
+        String message = nullToDefault(adminMessage, "Please share current progress update.");
+        ticket.setAdminStaffMessage(appendLog(ticket.getAdminStaffMessage(), message));
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(), formatMessage(
+                "Admin is asking for an update.",
+                "Client: " + ticket.getClient().getPhoneNumber(),
+                "Service: " + ticket.getServiceType(),
+                "Message: " + message,
+                "",
+                "Reply in dashboard/WhatsApp with STATUS update or submit revised document if ready."
+        ));
+
+        return updatedTicket;
+    }
+
+    @Transactional
+    public Ticket staffMessageClient(String ticketId, StaffClientMessageRequest request) {
+        Ticket ticket = resolveTicket(ticketId);
+        ensureAssigned(ticket);
+
+        String type = request.type().trim().toUpperCase();
+        String prefix = switch (type) {
+            case "NEED" -> "CA team needs this document/info:";
+            case "QUERY" -> "CA team has a query:";
+            default -> "CA team update:";
+        };
+
+        String clientMessage = formatMessage(
+                prefix,
+                request.message(),
+                "",
+                "Please reply here on WhatsApp so your file can move forward."
+        );
+
+        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), clientMessage);
+        ticket.setClientRequestLog(appendLog(ticket.getClientRequestLog(), type + ": " + request.message()));
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(), "Message sent to client.");
+        return updatedTicket;
+    }
+
+    @Transactional
+    public Ticket staffUpdateProgress(String ticketId, StaffProgressUpdateRequest request) {
+        Ticket ticket = resolveTicket(ticketId);
+        ensureAssigned(ticket);
+
+        ticket.setProgressPercent(request.progressPercent());
+        ticket.setStaffUpdate(appendLog(ticket.getStaffUpdate(), request.progressPercent() + "% - " + request.updateMessage()));
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), formatMessage(
+                "Work update from Phorwal CA Firm:",
+                request.updateMessage(),
+                "Progress: " + request.progressPercent() + "%"
+        ));
+
+        return updatedTicket;
+    }
+
+    @Transactional
+    public Ticket requestStaffChanges(String ticketId, String changeRequest) {
+        Ticket ticket = resolveTicket(ticketId);
+        if (!TicketStatus.PENDING_ADMIN_QC.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException("Only QC pending tickets can be sent back for changes. Current status: " + ticket.getStatus());
+        }
+
+        if (ticket.getAssignedStaff() == null) {
+            throw new InvalidTicketStateException("Ticket has no assigned staff member");
+        }
+
+        String feedback = nullToDefault(changeRequest, "Admin requested changes. Please review and resubmit final work.");
+        ticket.setStatus(TicketStatus.ASSIGNED_TO_STAFF.name());
+        ticket.setAdminNotes(feedback);
+        ticket.setRevisionNotes(appendLog(ticket.getRevisionNotes(), feedback));
+        ticket.setProgressPercent(75);
+        Ticket updatedTicket = saveAndBroadcast(ticket);
+
+        whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(), formatMessage(
+                "Admin requested changes for assigned client file.",
+                "Service: " + ticket.getServiceType(),
+                "Client phone: " + ticket.getClient().getPhoneNumber(),
+                "Feedback: " + feedback,
+                "",
+                "Please make corrections and upload the revised final document."
+        ));
+
+        log.info("Requested staff changes for ticket id={}", ticketId);
+        return updatedTicket;
+    }
+
+    @Transactional
+    public Ticket completeTicketAndDeliver(String ticketId, String finalDocumentUrl, String closingMessage) {
+        Ticket ticket = resolveTicket(ticketId);
+
+        if (finalDocumentUrl != null && !finalDocumentUrl.isBlank()) {
+            ticket.setStaffSubmittedDocument(finalDocumentUrl.trim());
+        }
+
+        // Validate state
+        if (!TicketStatus.PENDING_ADMIN_QC.name().equals(ticket.getStatus())
+                && !TicketStatus.ASSIGNED_TO_STAFF.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException("Ticket is not ready for delivery. Current status: " + ticket.getStatus());
+        }
+
+        ticket.setStatus(TicketStatus.FINISHED.name());
+        ticket.setCompletedAt(LocalDateTime.now());
+        ticket.setDeliveredAt(LocalDateTime.now());
+        ticket.setProgressPercent(100);
+
+        Ticket finishedTicket = saveAndBroadcast(ticket);
+        whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), formatMessage(
+                "\uD83C\uDF89 Work completed and delivered!",
+                "Service: " + ticket.getServiceType(),
+                "Message: " + nullToDefault(closingMessage, "Your work has been completed as per requirements."),
+                "Final document: " + (ticket.getStaffSubmittedDocument() != null ? s3StorageService.getSignedUrl(ticket.getStaffSubmittedDocument()) : "Contact support for final document link.")
+        ));
+
+        if (ticket.getAssignedStaff() != null) {
+            whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(),
+                    "\u2705 Ticket closed successfully for client " + ticket.getClient().getPhoneNumber());
+        }
+
+        chatSessionRepository.deleteById(ticket.getClient().getPhoneNumber());
+        log.info("Delivered and closed ticket id={}", ticketId);
+        return finishedTicket;
+    }
+
+    public Map<String, Long> getTicketStatistics() {
+        return Map.of(
+                "total", ticketRepository.count(),
+                "pending", ticketRepository.countByStatus(TicketStatus.PENDING_ADMIN_APPROVAL.name()),
+                "awaiting_payment", ticketRepository.countByStatus(TicketStatus.AWAITING_PAYMENT.name()),
+                "payment_received", ticketRepository.countByStatus(TicketStatus.PAYMENT_RECEIVED.name()),
+                "in_progress", ticketRepository.countByStatus(TicketStatus.IN_PROGRESS.name())
+                        + ticketRepository.countByStatus(TicketStatus.ASSIGNED_TO_STAFF.name()),
+                "pending_qc", ticketRepository.countByStatus(TicketStatus.PENDING_ADMIN_QC.name()),
+                "completed", ticketRepository.countByStatus(TicketStatus.FINISHED.name())
+        );
+    }
+    
+    private void saveClientHistory(Ticket ticket, String closingMessage) {
+        ClientHistory history = new ClientHistory();
+        history.setClient(ticket.getClient());
+        history.setServiceType(ticket.getServiceType());
+        history.setFeeCharged(ticket.getQuotedFee());
+        if (ticket.getAssignedStaff() != null) {
+            history.setAssignedCa(ticket.getAssignedStaff());
+        }
+        history.setCompletionDate(LocalDateTime.now());
+        history.setFinalSummary(closingMessage);
+        history.setRiskScore(String.valueOf(ticket.getReadinessScore())); // Or risk score if available
+        clientHistoryRepository.save(history);
+        
+        // Update client analytics
+        Client client = ticket.getClient();
+        client.setTotalCases(client.getTotalCases() + 1);
+        client.setCompletedCases(client.getCompletedCases() + 1);
+        if (ticket.getQuotedFee() != null) {
+            client.setTotalRevenueGenerated(client.getTotalRevenueGenerated() + ticket.getQuotedFee());
+        }
+        client.setAverageCaseValue(client.getTotalRevenueGenerated() / client.getTotalCases());
+        client.setLastServiceDate(LocalDateTime.now());
+        clientRepository.save(client);
+    }
+
+    public Staff resolveStaff(String identifier) {
+        try {
+            UUID id = UUID.fromString(identifier);
+            return staffRepository.findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Staff not found: " + id));
+        } catch (IllegalArgumentException e) {
+            String phone = identifier.replaceAll("[^0-9]", "");
+            if (phone.length() < 10) {
+                throw new ResourceNotFoundException("Invalid staff identifier or phone number: " + identifier);
+            }
+            return staffRepository.findByPhoneNumber(phone)
+                    .orElseThrow(() -> new ResourceNotFoundException("Staff not found for phone: " + phone));
+        }
+    }
+
+    private Ticket getRequiredTicket(UUID ticketId) {
+        return ticketRepository.findById(ticketId)
+                .orElseThrow(() -> new ResourceNotFoundException("Ticket not found: " + ticketId));
+    }
+
+    private void requireStatus(Ticket ticket, TicketStatus requiredStatus) {
+        if (!requiredStatus.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException(
+                    "Ticket must be " + requiredStatus.name() + ". Current status: " + ticket.getStatus());
+        }
+    }
+
+    private void ensureAssigned(Ticket ticket) {
+        if (ticket.getAssignedStaff() == null) {
+            throw new InvalidTicketStateException("Ticket has no assigned staff member");
+        }
+        if (!TicketStatus.ASSIGNED_TO_STAFF.name().equals(ticket.getStatus())
+                && !TicketStatus.PENDING_ADMIN_QC.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException("Ticket is not in staff workflow. Current status: " + ticket.getStatus());
+        }
+    }
+
+    private String appendLog(String current, String entry) {
+        if (entry == null || entry.isBlank()) {
+            return current;
+        }
+        String stamped = LocalDateTime.now() + " - " + entry.trim();
+        return current == null || current.isBlank() ? stamped : current + "\n" + stamped;
+    }
+
     private String formatMessage(String... lines) {
         return String.join("\n", lines);
     }
 
-    /**
-     * Format document list for display
-     */
     private String formatDocumentList(String documentsString) {
-        if (documentsString == null || documentsString.trim().isEmpty()) {
-            return "❌ No documents uploaded yet";
+        if (documentsString == null || documentsString.isBlank()) {
+            return "No documents uploaded yet";
         }
 
-        String[] docs = documentsString.split(",");
-        StringBuilder formatted = new StringBuilder();
-
+        String[] docs = documentsString.split("\\r?\\n|,");
+        StringBuilder builder = new StringBuilder();
         for (int i = 0; i < docs.length; i++) {
             String doc = docs[i].trim();
-            formatted.append((i + 1)).append(". 🔗 ").append(doc);
+            if (doc.isBlank()) {
+                continue;
+            }
+            builder.append(i + 1).append(". ").append(doc);
             if (i < docs.length - 1) {
-                formatted.append("\n");
+                builder.append("\n");
             }
         }
+        return builder.toString();
+    }
 
-        return formatted.toString();
+    private String nullToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    // ======================================================
+    // 🔴 CREDENTIAL REQUEST
+    // ======================================================
+
+    /**
+     * Admin requests credentials from client (IT portal login, Form 16 creds).
+     * Sets credentialStatus = REQUESTED. WhatsApp message sent to client.
+     * Red dot appears on dashboard card.
+     */
+    @Transactional
+    public Ticket requestCredentials(String ticketIdentifier, String credentialLabel) {
+        Ticket ticket = resolveTicket(ticketIdentifier);
+        String label = (credentialLabel != null && !credentialLabel.isBlank())
+                ? credentialLabel.trim()
+                : "IT Portal Login ID & Password";
+
+        ticket.setCredentialStatus("REQUESTED");
+        ticket.setCredentialRequestedAt(LocalDateTime.now());
+        ticket.setCredentialRequestLabel(label);
+        ticket = saveAndBroadcast(ticket);
+
+        String clientPhone = ticket.getClient().getPhoneNumber();
+        String clientName = ticket.getClient().getName() != null ? ticket.getClient().getName() : "Client";
+        String service = ticket.getServiceType();
+
+        String msg = "🔐 *Credential Request — " + service + "*\n\n" +
+                "Namaste " + clientName + " ji 🙏\n\n" +
+                "Aapki file process karne ke liye humein aapke *" + label + "* chahiye.\n\n" +
+                "Please apna Login ID aur Password yahan type kar dein:\n" +
+                "Example:\n" +
+                "*ID:* yourloginid@email.com\n" +
+                "*Password:* yourpassword\n\n" +
+                "⚠️ Yeh information sirf aapki ITR filing ke liye use hogi aur poori tarah secure hai.";
+        whatsappMessageSender.sendMessage(clientPhone, msg);
+        log.info("Credential requested for ticket={} label={}", ticket.getId(), label);
+        return ticket;
+    }
+
+    // ======================================================
+    // 📜 CLIENT HISTORY
+    // ======================================================
+
+    /**
+     * Get complete client history by phone or name query.
+     */
+    public Map<String, Object> getClientHistory(String query) {
+        List<Client> clients = clientRepository.searchByPhoneOrName(query);
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        if (clients.isEmpty()) {
+            result.put("found", false);
+            result.put("query", query);
+            result.put("message", "No client found matching: " + query);
+            return result;
+        }
+
+        // Take first match
+        Client client = clients.get(0);
+        List<Ticket> allTickets = ticketRepository.findAllByClientIdOrderByCreatedAtDesc(client.getId());
+
+        long totalCompleted = allTickets.stream()
+                .filter(t -> "FINISHED".equals(t.getStatus()) || "COMPLETED".equals(t.getStatus()))
+                .count();
+        long totalActive = allTickets.stream()
+                .filter(t -> TicketStatus.isActive(t.getStatus()))
+                .count();
+        double totalAmountPaid = allTickets.stream()
+                .filter(t -> "FINISHED".equals(t.getStatus()) || "COMPLETED".equals(t.getStatus()))
+                .mapToDouble(t -> t.getQuotedFee() != null ? t.getQuotedFee() : 0)
+                .sum();
+
+        Map<String, Object> clientInfo = new LinkedHashMap<>();
+        clientInfo.put("id", client.getId());
+        clientInfo.put("name", client.getName());
+        clientInfo.put("phoneNumber", client.getPhoneNumber());
+        clientInfo.put("city", client.getCity());
+        clientInfo.put("pinCode", client.getPinCode());
+        clientInfo.put("clientType", client.getClientType());
+        clientInfo.put("incomeRange", client.getIncomeRange());
+        clientInfo.put("memberSince", client.getCreatedAt());
+        clientInfo.put("lastServiceDate", client.getLastServiceDate());
+
+        result.put("found", true);
+        result.put("client", clientInfo);
+        result.put("stats", Map.of(
+                "totalTickets", allTickets.size(),
+                "totalCompleted", totalCompleted,
+                "totalActive", totalActive,
+                "totalAmountPaid", Math.round(totalAmountPaid)
+        ));
+        result.put("tickets", allTickets);
+        result.put("allMatches", clients.size());
+        return result;
+    }
+
+    // ==========================================================
+    // CALL-BASED FLOW METHODS (Non-ITR)
+    // ==========================================================
+
+    /**
+     * Mark a CALL_PENDING ticket as CALL_DONE and save notes
+     */
+    @Transactional
+    public Ticket markCallDone(String ticketId, String notes) {
+        Ticket ticket = ticketRepository.findById(UUID.fromString(ticketId))
+                .orElseThrow(() -> new ResourceNotFoundException("Ticket not found"));
+
+        if (!TicketStatus.CALL_PENDING.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException("Ticket is not in CALL_PENDING state. Current: " + ticket.getStatus());
+        }
+
+        ticket.setStatus(TicketStatus.CALL_DONE.name());
+        ticket.setCallNotes(notes);
+        ticket.setCallCompletedAt(LocalDateTime.now());
+        ticket.setCompletedAt(LocalDateTime.now());
+        ticket.setProgressPercent(100);
+        
+        return saveAndBroadcast(ticket);
     }
 
     /**
-     * Get emoji for priority level
+     * Get all CALL_PENDING tickets
      */
-    private String getPriorityEmoji(String priority) {
-        if (priority == null) return "📌";
-
-        return switch (priority.toUpperCase()) {
-            case "HIGH", "URGENT" -> "🚨";
-            case "MEDIUM" -> "⚡";
-            case "LOW" -> "📌";
-            default -> "📋";
-        };
-    }
-
-    /**
-     * Get ticket statistics for dashboard
-     */
-    public Map<String, Long> getTicketStatistics() {
-        List<Ticket> allTickets = ticketRepository.findAll();
-
-        return Map.of(
-                "total", (long) allTickets.size(),
-                "pending", allTickets.stream().filter(t -> "PENDING_ADMIN_APPROVAL".equals(t.getStatus())).count(),
-                "awaiting_payment", allTickets.stream().filter(t -> "AWAITING_PAYMENT".equals(t.getStatus())).count(),
-                "in_progress", allTickets.stream().filter(t -> "IN_PROGRESS".equals(t.getStatus()) || "ASSIGNED_TO_STAFF".equals(t.getStatus())).count(),
-                "pending_qc", allTickets.stream().filter(t -> "PENDING_ADMIN_QC".equals(t.getStatus())).count(),
-                "completed", allTickets.stream().filter(t -> "FINISHED".equals(t.getStatus())).count()
-        );
+    public List<Ticket> getCallPendingTickets() {
+        return ticketRepository.findByStatusOrderByCreatedAtDesc(TicketStatus.CALL_PENDING.name());
     }
 }

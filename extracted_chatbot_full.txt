@@ -1,0 +1,1092 @@
+package com.caCommand.caCommand.services;
+
+import com.caCommand.caCommand.dtos.DocumentVerificationResult;
+import com.caCommand.caCommand.dtos.GeminiAIResponse;
+import com.caCommand.caCommand.entities.ChatSession;
+import com.caCommand.caCommand.entities.Client;
+import com.caCommand.caCommand.entities.Staff;
+import com.caCommand.caCommand.entities.Ticket;
+import com.caCommand.caCommand.enums.ChatState;
+import com.caCommand.caCommand.enums.TicketStatus;
+import com.caCommand.caCommand.repositories.ChatSessionRepository;
+import com.caCommand.caCommand.repositories.ClientRepository;
+import com.caCommand.caCommand.repositories.StaffRepository;
+import com.caCommand.caCommand.repositories.TicketRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+@Service
+public class ChatBotService {
+
+private static final Logger log = LoggerFactory.getLogger(ChatBotService.class);
+private static final String TEST_SERVICE = "ITR Filing";
+
+private static final List<String> ACTIVE_TICKET_STATUSES = List.of(
+TicketStatus.PENDING_ADMIN_APPROVAL.name(),
+TicketStatus.AWAITING_PAYMENT.name(),
+TicketStatus.PAYMENT_RECEIVED.name(),
+TicketStatus.PAYMENT_VERIFICATION_PENDING.name(),
+TicketStatus.IN_PROGRESS.name(),
+TicketStatus.ASSIGNED_TO_STAFF.name(),
+TicketStatus.PENDING_ADMIN_QC.name(),
+TicketStatus.CALL_PENDING.name(),
+TicketStatus.NORMAL_FLOW.name(),
+TicketStatus.WAITING_FOR_CLIENT_DOCUMENT.name(),
+TicketStatus.WAITING_FOR_ADMIN.name(),
+TicketStatus.UNDER_REVIEW.name(),
+// Pipeline statuses — keep ticket active during/after document processing
+"VALIDATING", "OCR_RUNNING", "CLASSIFYING", "EXTRACTING",
+"AI_ANALYSIS", "COMPLETED", "FAILED"
+);
+
+private static final List<String> STAFF_ACTIVE_STATUSES = List.of(
+TicketStatus.ASSIGNED_TO_STAFF.name(),
+TicketStatus.PENDING_ADMIN_QC.name()
+);
+
+private final ChatSessionRepository sessionRepository;
+private final ClientRepository clientRepository;
+private final TicketRepository ticketRepository;
+private final WhatsAppMessageSender whatsappMessageSender;
+private final WhatsAppMediaService whatsappMediaService;
+private final StaffRepository staffRepository;
+private final GeminiService geminiService;
+private final LocationService locationService;
+private final LegacyDocumentExtractionService documentExtractionService;
+private final org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
+private final com.caCommand.caCommand.repositories.CustomDocumentRequestRepository customDocumentRequestRepository;
+private final S3StorageService s3StorageService;
+private final com.caCommand.caCommand.services.pipeline.PipelineOrchestrator pipelineOrchestrator;
+private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+@Autowired
+public ChatBotService(
+ChatSessionRepository sessionRepository,
+ClientRepository clientRepository,
+TicketRepository ticketRepository,
+WhatsAppMessageSender whatsappMessageSender,
+WhatsAppMediaService whatsappMediaService,
+StaffRepository staffRepository,
+GeminiService geminiService,
+LocationService locationService,
+LegacyDocumentExtractionService documentExtractionService,
+org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate,
+com.caCommand.caCommand.repositories.CustomDocumentRequestRepository customDocumentRequestRepository,
+S3StorageService s3StorageService,
+com.caCommand.caCommand.services.pipeline.PipelineOrchestrator pipelineOrchestrator,
+org.springframework.context.ApplicationEventPublisher eventPublisher
+) {
+this.sessionRepository = sessionRepository;
+this.clientRepository = clientRepository;
+this.ticketRepository = ticketRepository;
+this.whatsappMessageSender = whatsappMessageSender;
+this.whatsappMediaService = whatsappMediaService;
+this.staffRepository = staffRepository;
+this.geminiService = geminiService;
+this.locationService = locationService;
+this.documentExtractionService = documentExtractionService;
+this.messagingTemplate = messagingTemplate;
+this.customDocumentRequestRepository = customDocumentRequestRepository;
+this.s3StorageService = s3StorageService;
+this.pipelineOrchestrator = pipelineOrchestrator;
+this.eventPublisher = eventPublisher;
+}
+
+private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newScheduledThreadPool(5);
+private final java.util.Map<String, java.util.concurrent.ScheduledFuture<?>> pendingMessages = new java.util.concurrent.ConcurrentHashMap<>();
+
+@jakarta.annotation.PreDestroy
+public void cleanup() {
+scheduler.shutdown();
+}
+
+private void broadcastUpdate() {
+if (messagingTemplate != null) {
+messagingTemplate.convertAndSend("/topic/updates", (Object) Map.of("type", "CHAT_UPDATE", "timestamp", System.currentTimeMillis()));
+}
+}
+
+private Ticket saveAndBroadcast(Ticket ticket) {
+Ticket saved = ticketRepository.save(ticket);
+broadcastUpdate();
+return saved;
+}
+
+public void processUserMessage(String phoneNumber, String messageType, String messageContent) {
+// Check if sender is a staff member
+Staff staff = staffRepository.findByPhoneNumber(phoneNumber).orElse(null);
+if (staff != null) {
+handleStaffWorkflow(staff, messageType, messageContent);
+return;
+}
+
+if ("text".equals(messageType) && "hello testing".equalsIgnoreCase(messageContent.trim())) {
+Client client = clientRepository.findByPhoneNumber(phoneNumber)
+.orElseGet(() -> createClient(phoneNumber));
+client.setName("Bhanu");
+client.setCity("Ajmer");
+client.setDob("25052006");
+client.setPan("HAHAH12J21");
+client.setItPassword("BHanu@1261");
+client.setIncomeRange("BELOW_5L");
+clientRepository.save(client);
+
+ChatSession session = getOrCreateSession(phoneNumber);
+session.setClientName("Bhanu");
+session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
+sessionRepository.save(session);
+
+Ticket active = findActiveTicket(client);
+if (active != null) {
+active.setStatus(TicketStatus.TRASH.name());
+ticketRepository.save(active);
+}
+
+send(phoneNumber, session, "🧪 *Testing Mode Activated*\n\nWelcome Bhanu (Ajmer).\nAll details auto-filled!\n\nPlease select your service:\n\n1️⃣ ITR Filing\n2️⃣ GST Services\n3️⃣ Notice / Appeal\n4️⃣ Tax Advisory");
+return;
+}
+
+// Regular client flow
+Client client = clientRepository.findByPhoneNumber(phoneNumber)
+.orElseGet(() -> createClient(phoneNumber));
+ChatSession session = getOrCreateSession(phoneNumber);
+
+Ticket activeTicket = findActiveTicket(client);
+
+if (activeTicket != null) {
+handleActiveTicketFlow(client, session, activeTicket, messageType, messageContent, phoneNumber);
+} else {
+handleNewClientFlow(client, session, messageType, messageContent, phoneNumber);
+}
+}
+
+// ============================================================
+// NEW CLIENT FLOW — AIS Intelligence & Service Routing
+// ============================================================
+private void handleNewClientFlow(Client client, ChatSession session, String messageType,
+String messageContent, String phoneNumber) {
+
+if (!"text".equals(messageType)) {
+if (session.getCurrentState() == null || session.getCurrentState() == ChatState.NEW) {
+sendWelcomeNew(phoneNumber, session);
+return;
+}
+}
+
+ChatState state = session.getCurrentState() == null ? ChatState.NEW : session.getCurrentState();
+String content = messageContent.trim();
+
+switch (state) {
+case NEW:
+if (client.getName() != null && !client.getName().isBlank()) {
+// Returning User Flow
+session.setClientName(client.getName());
+session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
+sessionRepository.save(session);
+send(phoneNumber, session, "Welcome back " + client.getName() + " 👋\n\nHow can we assist you today?\n\n1️⃣ ITR Filing\n2️⃣ GST Services\n3️⃣ Notice / Appeal\n4️⃣ Tax Advisory");
+} else {
+// New User Flow
+session.setCurrentState(ChatState.COLLECTING_NAME);
+sessionRepository.save(session);
+send(phoneNumber, session, "✨ Welcome to Porwal CA\n\nI'm Arjun and I'll help you with your tax and compliance requirements today.\n\nTo get started, may I know your full name?");
+}
+break;
+
+case COLLECTING_NAME:
+if (content.length() > 2) {
+session.setClientName(content);
+session.setCurrentState(ChatState.COLLECTING_CITY);
+sessionRepository.save(session);
+send(phoneNumber, session, "Nice to meet you, " + content + ".\n\n📍 Which city are you currently based in?\n\nThis helps us assign the right CA expert for your case.");
+} else {
+send(phoneNumber, session, "Could you please share your full name to proceed?");
+}
+break;
+
+case COLLECTING_CITY:
+// Accepts text or location payload
+session.setClientCity(content);
+session.setCurrentState(ChatState.COLLECTING_PAN);
+sessionRepository.save(session);
+send(phoneNumber, session, "Got it.\n\nNow, could you please share your **PAN Number**?");
+break;
+
+case COLLECTING_PAN:
+session.setClientPan(content.toUpperCase());
+session.setCurrentState(ChatState.COLLECTING_DOB);
+sessionRepository.save(session);
+send(phoneNumber, session, "Thank you. Lastly, what is your **Date of Birth**? (Format: DD/MM/YYYY)");
+break;
+
+case COLLECTING_DOB:
+session.setClientDob(content);
+session.setCurrentState(ChatState.COLLECTING_PASSWORD);
+sessionRepository.save(session);
+send(phoneNumber, session, "Great. Now please provide your **IT Portal Password** (it will be securely stored for our CA team to process your return).");
+break;
+
+case COLLECTING_PASSWORD:
+session.setClientItPassword(content);
+session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
+sessionRepository.save(session);
+send(phoneNumber, session, "Perfect.\n\nPlease tell us how we can assist you today:\n\n1️⃣ ITR Filing\n2️⃣ GST Services\n3️⃣ Notice / Appeal\n4️⃣ Tax Advisory");
+break;
+
+case SERVICE_SELECTION_SHOWN:
+String selectedService = "";
+boolean isCallService = false;
+
+if (content.contains("1") || content.toLowerCase().contains("itr")) {
+selectedService = "ITR Filing";
+isCallService = false;
+} else if (content.contains("2") || content.toLowerCase().contains("gst")) {
+selectedService = "GST Services";
+isCallService = false;
+} else if (content.contains("3") || content.toLowerCase().contains("notice") || content.toLowerCase().contains("appeal")) {
+selectedService = "Tax Notice / Appeal";
+isCallService = false;
+} else if (content.contains("4") || content.toLowerCase().contains("advisory")) {
+selectedService = "Tax Advisory";
+isCallService = true;
+} else {
+send(phoneNumber, session, "Kripya 1 se 4 ke beech koi option select karein.");
+return;
+}
+
+// Set name if missing
+if (isBlank(client.getName())) {
+client.setName(session.getClientName() != null ? session.getClientName() : "Client " + phoneNumber.substring(phoneNumber.length() - 4));
+}
+if (isBlank(client.getCity()) && session.getClientCity() != null) {
+client.setCity(session.getClientCity());
+}
+if (isBlank(client.getPan()) && session.getClientPan() != null) {
+client.setPan(session.getClientPan());
+}
+if (isBlank(client.getDob()) && session.getClientDob() != null) {
+client.setDob(session.getClientDob());
+}
+if (isBlank(client.getItPassword()) && session.getClientItPassword() != null) {
+client.setItPassword(session.getClientItPassword());
+}
+clientRepository.save(client);
+
+session.setExtractedService(aiResponse.getService());
+}
+
+boolean hasCity = client.getCity() != null && !client.getCity().isEmpty();
+boolean hasService = session.getExtractedService() != null && !session.getExtractedService().isEmpty();
+
+if (hasCity && hasService && session.getCurrentState() != ChatState.AWAITING_DOCS) {
+Ticket newTicket = new Ticket();
+newTicket.setClient(client);
+newTicket.setServiceType(session.getExtractedService());
+newTicket.setStatus("PENDING_ADMIN_APPROVAL");
+ticketRepository.save(newTicket);
+
+session.setCurrentState(ChatState.AWAITING_DOCS);
+sessionRepository.save(session);
+
+System.out.println("🎟️ Ticket created -> Service: " + session.getExtractedService() + " | City: " + client.getCity());
+whatsappMessageSender.sendMessage(phoneNumber, aiResponse.getReply_message());
+
+callTicket.setClientRequestLog(content);
+saveAndBroadcast(callTicket);
+
+session.setCurrentState(ChatState.FINISHED);
+sessionRepository.save(session);
+
+send(phoneNumber, session, "✅ Your " + session.getExtractedService() + " Consultation Has Been Scheduled\n\n" +
+"One of our tax specialists will review your case and reach out shortly.");
+break;
+
+default:
+sendWelcomeNew(phoneNumber, session);
+session.setCurrentState(ChatState.NEW);
+sessionRepository.save(session);
+break;
+}
+}
+
+private void sendWelcomeNew(String phoneNumber, ChatSession session) {
+send(phoneNumber, session, "👋 Welcome to Porwal CA\n\nI'm Arjun and I'll help you with your tax and compliance requirements today.\n\nTo get started, may I know your full name?");
+}
+
+// ============================================================
+// ACTIVE TICKET FLOW — Client already has a ticket in progress
+// ============================================================
+private void handleActiveTicketFlow(Client client, ChatSession session, Ticket ticket,
+String messageType, String messageContent, String phoneNumber) {
+if ("location".equals(messageType)) {
+handleLocationMessage(client, session, messageContent, phoneNumber);
+return;
+}
+
+// Document/image upload
+if ("document".equals(messageType) || "image".equals(messageType)) {
+String status = ticket.getStatus();
+if (TicketStatus.PENDING_ADMIN_APPROVAL.name().equals(status)
+|| ChatState.AWAITING_DOCS.equals(session.getCurrentState())
+|| TicketStatus.NORMAL_FLOW.name().equals(status)) {
+verifyAndSaveClientDocument(session, ticket, messageContent, phoneNumber);
+} else if (TicketStatus.WAITING_FOR_CLIENT_DOCUMENT.name().equals(status)) {
+handleCustomDocumentUpload(session, ticket, messageContent, phoneNumber);
+} else if (TicketStatus.AWAITING_PAYMENT.name().equals(status)) {
+// Client sent payment screenshot
+ticket.setPaymentProofUrl(messageContent);
+ticket.setStatus(TicketStatus.PAYMENT_VERIFICATION_PENDING.name());
+saveAndBroadcast(ticket);
+send(phoneNumber, session, """
+Screenshot receive ho gaya! ✅
+
+Humari admin team payment verify karke aapka kaam shuru kar degi.
+Aapko WhatsApp par update milega.
+""");
+} else {
+send(phoneNumber, session, "✅ Document receive ho gaya. Team check karegi.");
+}
+return;
+}
+
+if (!"text".equals(messageType)) {
+sendDocumentChecklist(phoneNumber, session, ticket, false);
+return;
+}
+
+// ===========================================
+// 🔐 CREDENTIAL DETECTION
+// If admin requested credentials and client sends text containing id/password patterns
+// ===========================================
+if ("REQUESTED".equals(ticket.getCredentialStatus()) && "text".equals(messageType)) {
+if (looksLikeCredentials(messageContent)) {
+ticket.setCredentialData(messageContent.trim());
+ticket.setCredentialStatus("RECEIVED");
+ticket.setCredentialReceivedAt(java.time.LocalDateTime.now());
+saveAndBroadcast(ticket);
+String clientName = client.getName() != null ? client.getName() : "";
+send(phoneNumber, session, String.format("""
+%s, credentials receive ho gaye! ✅
+
+Humari team aapki file process karega.
+Kuch time mein update milega. 🙏
+""", clientName));
+log.info("Credentials received for ticket={} from phone={}", ticket.getId(), phoneNumber);
+return;
+}
+}
+
+// Update language preference silently
+updateLanguagePreference(session, messageContent);
+
+String status = ticket.getStatus();
+
+if (TicketStatus.CALL_PENDING.name().equals(status)) {
+send(phoneNumber, session, """
+Aapki request already receive ho gayi hai. ✅
+
+Hamare CA expert 24 ghante ke andar aapko call karenge.
+Urgent note ho to yahin bhej dein, main team ko forward kar dunga.
+""");
+ticket.setClientRequestLog(appendLog(ticket.getClientRequestLog(), messageContent));
+saveAndBroadcast(ticket);
+return;
+}
+
+if (TicketStatus.PENDING_ADMIN_APPROVAL.name().equals(status)) {
+// Still waiting for admin review
+List<String> missing = missingDocuments(ticket, session);
+if (!missing.isEmpty()) {
+// Still needs docs
+send(phoneNumber, session, String.format("""
+%s, aapki file review queue mein hai.
+
+Lekin kuch documents abhi bhi pending hain:
+%s
+
+Please clear photo ya PDF bhejein.
+""", nullToDefault(client.getName(), ""), bulletList(missing)));
+} else {
+send(phoneNumber, session, String.format("""
+%s, aapke saare documents submit ho gaye hain! ✅
+
+Phorwal CA Firm team review kar rahi hai.
+Fee aur payment link jald hi WhatsApp par milega.
+""", nullToDefault(client.getName(), "")));
+}
+return;
+}
+
+if (TicketStatus.AWAITING_PAYMENT.name().equals(status)) {
+String msg = messageContent.toLowerCase(Locale.ROOT).trim();
+if (msg.length() > 5 && !msg.contains("hi") && !msg.contains("hello") && !msg.contains("help")) {
+ticket.setPaymentProofUrl("TEXT: " + messageContent);
+ticket.setStatus(TicketStatus.PAYMENT_VERIFICATION_PENDING.name());
+saveAndBroadcast(ticket);
+send(phoneNumber, session, String.format("""
+%s, detail receive ho gayi! 🙏
+
+Humari admin team payment verify karke aapka kaam shuru kar degi.
+Aapko WhatsApp par update milega.
+""", nullToDefault(client.getName(), "")));
+} else {
+send(phoneNumber, session, String.format("""
+%s, payment abhi pending hai.
+
+Kripya upar diye gaye QR code par payment karein aur yahan screenshot bhejein. 💳
+
+Problem ho to reply karo — team help karegi.
+""", nullToDefault(client.getName(), "")));
+}
+return;
+}
+
+if (TicketStatus.PAYMENT_VERIFICATION_PENDING.name().equals(status)) {
+send(phoneNumber, session, "Aapki payment ki verification admin team kar rahi hai. Kripya thoda intezaar karein. 🙏");
+return;
+}
+
+if (TicketStatus.PAYMENT_RECEIVED.name().equals(status)) {
+send(phoneNumber, session, String.format("""
+%s, payment confirm ho gaya! ✅
+
+Team final verification ke baad kaam start karegi.
+Jald hi update milega.
+""", nullToDefault(client.getName(), "")));
+return;
+}
+
+if (TicketStatus.IN_PROGRESS.name().equals(status)) {
+send(phoneNumber, session, String.format("""
+%s, aapka %s kaam chal raha hai! 🏃
+
+Team actively work kar rahi hai.
+Koi specific sawaal ho to yahin type karo.
+""", nullToDefault(client.getName(), ""), ticket.getServiceType()));
+return;
+}
+
+if (TicketStatus.ASSIGNED_TO_STAFF.name().equals(status)) {
+// Forward to staff
+forwardClientMessageToStaff(ticket, client, phoneNumber, messageContent);
+return;
+}
+
+if (TicketStatus.PENDING_ADMIN_QC.name().equals(status)) {
+send(phoneNumber, session, String.format("""
+%s, aapka %s final quality check mein hai! 🔍
+
+Thoda wait karo — final document ready hote hi yahin share kar diya jayega.
+""", nullToDefault(client.getName(), ""), ticket.getServiceType()));
+return;
+}
+
+if (TicketStatus.FINISHED.name().equals(status) || TicketStatus.COMPLETED.name().equals(status)) {
+resetSession(session);
+send(phoneNumber, session, String.format("""
+%s, aapka previous %s complete ho chuka hai! 🎉
+
+Nayi service ke liye batao — Phorwal CA Firm hamesha ready hai.
+""", nullToDefault(client.getName(), ""), ticket.getServiceType()));
+return;
+}
+
+// Default: send checklist
+sendDocumentChecklist(phoneNumber, session, ticket, false);
+}
+
+// ============================================================
+// DOCUMENT VERIFICATION
+// ============================================================
+private void handleCustomDocumentUpload(ChatSession session, Ticket ticket, String mediaId, String phoneNumber) {
+String cloudinaryUrl = whatsappMediaService.downloadAndSaveMedia(mediaId, phoneNumber);
+if (cloudinaryUrl == null) {
+send(phoneNumber, session, "⚠ Document download failed. Please send again.");
+return;
+}
+
+java.util.List<com.caCommand.caCommand.entities.CustomDocumentRequest> requests = customDocumentRequestRepository.findByTicketIdAndStatus(ticket.getId(), "PENDING");
+if (requests.isEmpty()) {
+send(phoneNumber, session, "✅ Document received. Our team will review it.");
+return;
+}
+
+// Just take the first pending request for now
+com.caCommand.caCommand.entities.CustomDocumentRequest req = requests.get(0);
+DocumentVerificationResult result = geminiService.verifyCustomDocument(cloudinaryUrl, req.getDocumentName());
+
+if (!result.valid()) {
+send(phoneNumber, session, String.format("⚠ Uploaded document does not match requested item (%s).\n\nReason: %s", req.getDocumentName(), result.reason()));
+return;
+}
+
+req.setStatus("FULFILLED");
+req.setFulfilledAt(java.time.LocalDateTime.now());
+customDocumentRequestRepository.save(req);
+
+// Append to ticket documents
+appendClientDocument(ticket, req.getDocumentName(), cloudinaryUrl);
+ticket.setStatus(TicketStatus.UNDER_REVIEW.name()); // move back to review
+saveAndBroadcast(ticket);
+
+send(phoneNumber, session, String.format("✅ %s received and verified.\n\nYour case has been updated successfully.", req.getDocumentName()));
+}
+
+private void verifyAndSaveClientDocument(ChatSession session, Ticket ticket,
+String mediaId, String phoneNumber) {
+String cloudinaryUrl = whatsappMediaService.downloadAndSaveMedia(mediaId, phoneNumber);
+if (cloudinaryUrl == null) {
+send(phoneNumber, session, "? Document download/upload fail ho gaya. Please clear photo/PDF dobara bhejein.");
+return;
+}
+
+// 1. Verify instantly using AI
+com.caCommand.caCommand.dtos.DocumentVerificationResult result = geminiService.verifyClientDocument(cloudinaryUrl, ticket.getServiceType(), false);
+
+if (!result.valid()) {
+send(phoneNumber, session, "? " + result.reason() + "\n\nKripya sahi document bhejein.");
+return;
+}
+
+String verifiedDoc = geminiService.canonicalizeDocumentName(result.documentType());
+
+synchronized (ticket.getId().toString().intern()) {
+Ticket freshTicket = ticketRepository.findById(ticket.getId()).orElse(ticket);
+
+// Handle client documents tracking with "Name :: URL" format
+java.util.Map<String, String> collectedDocs = new java.util.LinkedHashMap<>();
+if (freshTicket.getClientDocuments() != null && !freshTicket.getClientDocuments().isEmpty()) {
+String[] lines = freshTicket.getClientDocuments().split("\n");
+for (String line : lines) {
+String[] parts = line.split(" :: ");
+if (parts.length >= 1) {
+// Filter out old JSON brackets if they exist from before
+String name = parts[0].trim().replace("[\"", "").replace("\"]", "");
+String url = parts.length >= 2 ? parts[1].trim() : "";
+collectedDocs.put(name, url);
+}
+}
+}
+
+collectedDocs.put(verifiedDoc, cloudinaryUrl);
+
+StringBuilder sbDocs = new StringBuilder();
+List<String> collected = new ArrayList<>();
+for (java.util.Map.Entry<String, String> entry : collectedDocs.entrySet()) {
+sbDocs.append(entry.getKey()).append(" :: ").append(entry.getValue()).append("\n");
+collected.add(entry.getKey());
+}
+freshTicket.setClientDocuments(sbDocs.toString());
+
+saveAndBroadcast(freshTicket);
+}
+
+// Generate checklist status message
+Runnable sendTask = () -> {
+try {
+Ticket latestTicket = ticketRepository.findById(ticket.getId()).orElse(ticket);
+List<String> reqDocs = geminiService.getRequiredDocuments(latestTicket.getServiceType());
+List<String> coll = new ArrayList<>();
+if (latestTicket.getClientDocuments() != null && !latestTicket.getClientDocuments().isEmpty()) {
+for (String line : latestTicket.getClientDocuments().split("\n")) {
+String[] parts = line.split(" :: ");
+if (parts.length >= 1) {
+coll.add(parts[0].trim().replace("[\"", "").replace("\"]", ""));
+}
+}
+}
+
+List<String> miss = new ArrayList<>(reqDocs);
+miss.removeAll(coll);
+
+StringBuilder sbuild = new StringBuilder();
+sbuild.append("\u2705 Document received and verified.\n\n");
+sbuild.append("\uD83D\uDCCA *Document Status*\n\n");
+
+sbuild.append("*Received:*\n");
+for (String c : coll) {
+sbuild.append("\u2713 ").append(c).append("\n");
+}
+
+if (!miss.isEmpty()) {
+sbuild.append("\n*Missing:*\n");
+for (String m : miss) {
+sbuild.append("\u26A0\uFE0F ").append(m).append("\n");
+}
+}
+send(phoneNumber, session, sbuild.toString());
+} catch (Exception e) {
+log.error("Error sending debounced message", e);
+}
+};
+
+java.util.concurrent.ScheduledFuture<?> existing = pendingMessages.get(phoneNumber);
+if (existing != null) {
+existing.cancel(false);
+}
+pendingMessages.put(phoneNumber, scheduler.schedule(sendTask, 4, java.util.concurrent.TimeUnit.SECONDS));
+
+// 2. Start Async Pipeline Process using Event-Driven Architecture (Phase 1)
+eventPublisher.publishEvent(new com.caCommand.caCommand.events.DocumentUploadedEvent(this, ticket.getId().toString(), phoneNumber));
+}
+
+private String bulletListWarning(List<String> items) {
+if (items == null || items.isEmpty()) return "None";
+StringBuilder sb = new StringBuilder();
+for (String item : items) {
+sb.append("⚠ ").append(item).append("\n");
+}
+return sb.toString().trim();
+}
+
+// ============================================================
+// WELCOME & CHECKLIST MESSAGES
+// ============================================================
+private void sendWelcome(String phoneNumber, ChatSession session, Client client) {
+String name = client.getName();
+if (!isBlank(name)) {
+send(phoneNumber, session, String.format("""
+🙏 Namaste %s!
+Phorwal CA Firm mein aapka swagat hai.
+
+Kaunsi CA service chahiye?
+
+• ITR Filing
+• GST Registration / GST Return
+• Balance Sheet / Audit
+• Company Registration
+• PAN Card Application
+• TDS Return Filing
+""", name));
+} else {
+send(phoneNumber, session, """
+🙏 Namaste! Phorwal CA Firm mein aapka swagat hai.
+
+Apna naam batao please — taaki main aapko personally guide kar sakoon.
+""");
+}
+}
+
+private void sendDocumentChecklist(String phoneNumber, ChatSession session,
+Ticket ticket, boolean newlyCreated) {
+String clientName = ticket.getClient() != null ? nullToDefault(ticket.getClient().getName(), "") : "";
+String serviceType = ticket.getServiceType();
+String message = getDetailedDocumentTemplate(serviceType, clientName);
+send(phoneNumber, session, message);
+}
+
+private String getDetailedDocumentTemplate(String serviceType, String clientName) {
+String nameStr = isBlank(clientName) ? "Client" : clientName;
+} else {
+send(phoneNumber, session, """
+🙏 Namaste! Phorwal CA Firm mein aapka swagat hai.
+
+Apna naam batao please — taaki main aapko personally guide kar sakoon.
+""");
+}
+}
+
+private void sendDocumentChecklist(String phoneNumber, ChatSession session,
+Ticket ticket, boolean newlyCreated) {
+String clientName = ticket.getClient() != null ? nullToDefault(ticket.getClient().getName(), "") : "";
+
+Required Documents:
+✓ Notice PDF
+✓ Assessment Order
+✓ Previous ITR Copy
+✓ Previous Response Submitted (if any)
+
+Additional Documents:
+✓ Demand Order
+✓ Appeal Order
+✓ Supporting Documents
+✓ CA Correspondence
+
+📎 Agar koi document available nahi hai to jo available ho wahi upload karein.
+🤖 Arjun AI notice risk, due dates aur suggested actions identify karega.
+""", nameStr);
+case "GST Services":
+return String.format("""
+📋 %s, GST Services ke liye following documents upload karein:
+
+Required Documents:
+✓ GST Certificate
+✓ GSTR-1
+✓ GSTR-3B
+✓ Sales Report
+✓ Purchase Report
+
+📎 Aap documents photo ya PDF format mein upload kar sakte hain.
+""", nameStr);
+case "Audit & Compliance":
+return String.format("""
+📋 %s, Audit & Compliance ke liye following documents upload karein:
+
+Required Documents:
+✓ Financial Statements
+✓ Trial Balance
+✓ Profit & Loss Statement
+✓ Balance Sheet
+✓ GST Returns
+
+Required Documents:
+✓ GST Certificate
+✓ GSTR-1
+✓ GSTR-3B
+✓ Sales Report
+✓ Purchase Report
+
+📎 Aap documents photo ya PDF format mein upload kar sakte hain.
+""", nameStr);
+✓ Trial Balance
+✓ Profit & Loss Statement
+✓ Balance Sheet
+✓ GST Returns
+✓ Previous Audit Report
+
+📎 Aap documents photo ya PDF format mein upload kar sakte hain.
+""", nameStr);
+case "Financial Planning":
+return String.format("""
+📋 %s, Financial Planning ke liye following documents upload karein:
+
+Required Documents:
+✓ Income Details
+✓ Existing Investments
+✓ Insurance Details
+✓ Loan Details
+✓ Bank Statements
+
+📎 Aap documents photo ya PDF format mein upload kar sakte hain.
+""", nameStr);
+case "Business Registration":
+return String.format("""
+📋 %s, Business Registration ke liye following documents upload karein:
+
+Required Documents:
+✓ PAN Card
+✓ Aadhaar Card
+✓ Passport Size Photo
+✓ Mobile Number
+✓ Email ID
+✓ Business Address Proof
+
+📎 Aap documents photo ya PDF format mein upload kar sakte hain.
+""", nameStr);
+case "Tax Advisory":
+return String.format("""
+📋 %s, Tax Advisory ke liye following documents upload karein:
+
+Required Documents:
+✓ Query Description
+
+Optional:
+✓ AIS Statement
+✓ TIS Statement
+✓ Previous ITR
+✓ Supporting Documents
+
+📎 Aap documents photo ya PDF format mein upload kar sakte hain.
+""", nameStr);
+}
+
+// ============================================================
+// LOCATION HANDLING
+// ============================================================
+private void handleLocationMessage(Client client, ChatSession session,
+String messageContent, String phoneNumber) {
+String[] coords = messageContent.split(",");
+if (coords.length != 2) {
+send(phoneNumber, session, "📍 Location read nahi ho payi. Please apni city name type karo, jaise \"Ajmer\".");
+return;
+}
+
+String detectedCity = locationService.getCityFromCoordinates(coords[0].trim(), coords[1].trim());
+if (isBlank(detectedCity)) {
+send(phoneNumber, session, "📍 City detect nahi ho payi. Please apni city type karo.");
+return;
+}
+
+client.setCity(detectedCity);
+clientRepository.save(client);
+
+if (!isBlank(session.getExtractedService())) {
+Ticket ticket = findActiveTicket(client);
+if (ticket == null) {
+ticket = createTicket(client, session.getExtractedService(), session);
+session.setCurrentState(ChatState.AWAITING_DOCS);
+session.setVerifiedDocumentTypes("");
+sessionRepository.save(session);
+}
+sendDocumentChecklist(phoneNumber, session, ticket, true);
+} else {
+String name = nullToDefault(client.getName(), "");
+send(phoneNumber, session, String.format("""
+📍 %s, aap %s se hain — noted!
+
+Ab batao kaunsi CA service chahiye:
+ITR Filing, GST, Balance Sheet, Company Registration, etc.
+""", isBlank(name) ? "" : name + " ", detectedCity));
+}
+}
+
+// ============================================================
+// TEST MODE (Developer)
+// ============================================================
+private void enableTestMode(Client client, ChatSession session, Ticket activeTicket, String phoneNumber, int testIndex) {
+session.setTestMode(true);
+session.setPreferredLanguage("HINGLISH");
+
+String testPan = "";
+
+
+
+
+
+
+
+
+
+UPDATE: [progress note]
+Upload final PDF/image to submit for QC
+""",
+ticket.getServiceType(),
+ticket.getStatus(),
+clientName,
+ticket.getClient() != null ? ticket.getClient().getPhoneNumber() : "-",
+nullToDefault(ticket.getClient() != null ? ticket.getClient().getCity() : null, "N/A"),
+ticket.getProgressPercent() != null ? ticket.getProgressPercent() : 0,
+nullToDefault(ticket.getClientDocuments(), "No documents uploaded yet")
+);
+}
+
+private void forwardClientMessageToStaff(Ticket ticket, Client client, String phoneNumber, String messageContent) {
+String staffPhone = ticket.getAssignedStaff() != null ? ticket.getAssignedStaff().getPhoneNumber() : null;
+if (staffPhone == null) {
+send(null, null, null); // no-op
+whatsappMessageSender.sendMessage(phoneNumber, "Aapka message CA team ke paas pahunch gaya. Jald hi reply milega.");
+return;
+}
+
+String clientDisplay = nullToDefault(client.getName(), phoneNumber);
+whatsappMessageSender.sendMessage(staffPhone,
+"💬 Client (" + clientDisplay + ") message:\n" + messageContent);
+whatsappMessageSender.sendMessage(phoneNumber,
+"✅ Aapka message CA team ko forward kar diya gaya. Jald hi reply milega.");
+}
+
+private void send(String phoneNumber, ChatSession session, String message) {
+if (phoneNumber == null || message == null) return;
+whatsappMessageSender.sendMessage(phoneNumber, message.strip());
+}
+
+private void updateLanguagePreference(ChatSession session, String messageContent) {
+if (messageContent == null || session == null) return;
+String msg = messageContent.toLowerCase(Locale.ROOT);
+// Only update and save if changed
+if ((msg.equals("english") || msg.equals("speak english") || msg.equals("in english"))
+&& !"ENGLISH".equals(session.getPreferredLanguage())) {
+session.setPreferredLanguage("ENGLISH");
+sessionRepository.save(session);
+} else if ((msg.equals("hindi") || msg.equals("hinglish"))
+&& !"HINGLISH".equals(session.getPreferredLanguage())) {
+session.setPreferredLanguage("HINGLISH");
+sessionRepository.save(session);
+}
+}
+
+private void resetSession(ChatSession session) {
+session.setCurrentState(ChatState.AI_CONVERSATION);
+session.setExtractedService(null);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Progress: %s%%
+Documents: %s
+
+Commands:
+STATUS — refresh this info
+REQUEST: [doc/info needed]
+QUERY: [question for client]
+UPDATE: [progress note]
+Upload final PDF/image to submit for QC
+""",
+ticket.getServiceType(),
+ticket.getStatus(),
+clientName,
+ticket.getClient() != null ? ticket.getClient().getPhoneNumber() : "-",
+nullToDefault(ticket.getClient() != null ? ticket.getClient().getCity() : null, "N/A"),
+ticket.getProgressPercent() != null ? ticket.getProgressPercent() : 0,
+nullToDefault(ticket.getClientDocuments(), "No documents uploaded yet")
+);
+}
+
+private void forwardClientMessageToStaff(Ticket ticket, Client client, String phoneNumber, String messageContent) {
+String staffPhone = ticket.getAssignedStaff() != null ? ticket.getAssignedStaff().getPhoneNumber() : null;
+if (staffPhone == null) {
+send(null, null, null); // no-op
+whatsappMessageSender.sendMessage(phoneNumber, "Aapka message CA team ke paas pahunch gaya. Jald hi reply milega.");
+return;
+}
+
+String clientDisplay = nullToDefault(client.getName(), phoneNumber);
+whatsappMessageSender.sendMessage(staffPhone,
+"💬 Client (" + clientDisplay + ") message:\n" + messageContent);
+whatsappMessageSender.sendMessage(phoneNumber,
+"✅ Aapka message CA team ko forward kar diya gaya. Jald hi reply milega.");
+}
+
+private void send(String phoneNumber, ChatSession session, String message) {
+if (phoneNumber == null || message == null) return;
+whatsappMessageSender.sendMessage(phoneNumber, message.strip());
+}
+
+private void updateLanguagePreference(ChatSession session, String messageContent) {
+if (messageContent == null || session == null) return;
+String msg = messageContent.toLowerCase(Locale.ROOT);
+// Only update and save if changed
+if ((msg.equals("english") || msg.equals("speak english") || msg.equals("in english"))
+&& !"ENGLISH".equals(session.getPreferredLanguage())) {
+session.setPreferredLanguage("ENGLISH");
+sessionRepository.save(session);
+} else if ((msg.equals("hindi") || msg.equals("hinglish"))
+&& !"HINGLISH".equals(session.getPreferredLanguage())) {
+session.setPreferredLanguage("HINGLISH");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}
+
+private boolean isBlank(String value) {
+return value == null || value.trim().isEmpty();
+}
+
+private String nullToDefault(String value, String defaultValue) {
+return isBlank(value) ? defaultValue : value;
+}
+
+private List<String> csvToList(String value) {
+if (isBlank(value)) return new ArrayList<>();
+String[] parts = value.split(",");
+List<String> result = new ArrayList<>();
+for (String part : parts) {
+if (!isBlank(part)) result.add(part.trim());
+}
+return result;
+}
+
+private String normalize(String value) {
+return value == null ? "" : value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+}
+
+private String appendLog(String current, String entry) {
+if (isBlank(entry)) return current;
+String stamped = java.time.LocalDateTime.now() + " - " + entry.trim();
+return isBlank(current) ? stamped : current + "\n" + stamped;
+}
+
+/**
+* Detects if a WhatsApp message looks like login credentials.
+* Matches patterns like:
+*   "ID: abc@email.com Password: 12345"
+*   "login: xxx pass: yyy"
+*   "username abc password xyz"
+*   "user: abc@email pwd: pass123"
+*/
+private boolean looksLikeCredentials(String message) {
+if (message == null || message.isBlank()) return false;
+String lower = message.toLowerCase(Locale.ROOT);
+// Must contain both an identifier keyword AND a password keyword
+boolean hasIdKeyword = lower.contains("id:") || lower.contains("user:") || lower.contains("login:")
+|| lower.contains("username:") || lower.contains("userid:") || lower.contains("user id")
+|| lower.contains("email:") || lower.contains("mobile:") || lower.contains("pan:")
+|| (lower.contains("id") && lower.contains("@")); // email pattern
+boolean hasPassKeyword = lower.contains("password:") || lower.contains("pass:") || lower.contains("pwd:")
+|| lower.contains("passcode:") || lower.contains("password ")
+|| lower.contains("pass ") || lower.contains("otp:");
+return hasIdKeyword && hasPassKeyword;
+}
+}
+

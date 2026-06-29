@@ -31,3 +31,8 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Sensitive info
+application-dev.properties
+.env
+

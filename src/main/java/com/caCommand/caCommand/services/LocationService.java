@@ -4,6 +4,8 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import tools.jackson.databind.JsonNode;
@@ -12,11 +14,13 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class LocationService {
 
+    private static final Logger log = LoggerFactory.getLogger(LocationService.class);
+
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
-    public LocationService() {
-        this.restTemplate = new RestTemplate();
+    public LocationService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -47,7 +51,7 @@ public class LocationService {
             }
 
         } catch (Exception e) {
-            System.out.println("❌ Location Extraction Error: " + e.getMessage());
+            log.warn("Location extraction failed for lat={} lon={}", lat, lon, e);
         }
         return null; // Agar fail ho jaye
     }

@@ -1,52 +1,67 @@
 package com.caCommand.caCommand.security;
 
-import java.nio.charset.StandardCharsets;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 
 @Component
 public class WhatsAppSecurityUtils {
 
-    @Value("${whatsapp.app-secret}")
-    private String appSecret;
+    private static final Logger log = LoggerFactory.getLogger(WhatsAppSecurityUtils.class);
+    private static final String SIGNATURE_PREFIX = "sha256=";
+    private static final String HMAC_ALGORITHM = "HmacSHA256";
 
-public boolean isValidSignature(String payload, String signatureHeader) {
-    if (signatureHeader == null || !signatureHeader.startsWith("sha256=")) {
-        System.out.println("DEBUG: Missing or malformed header -> " + signatureHeader);
-        return false;
+    private final String appSecret;
+
+    public WhatsAppSecurityUtils(@Value("${whatsapp.app-secret}") String appSecret) {
+        this.appSecret = appSecret;
     }
 
-    String expectedSignature = "sha256=" + calculateHmacSha256(payload, appSecret);
-    
-    // --- DEBUG LOGS (Temporary) ---
-    System.out.println("========== DEBUG INFO ==========");
-    System.out.println("Java Expected : " + expectedSignature);
-    System.out.println("Postman Sent  : " + signatureHeader);
-    System.out.println("================================");
-    
-    return expectedSignature.equals(signatureHeader);
-}
+    public boolean isValidSignature(String payload, String signatureHeader) {
+        if (payload == null || signatureHeader == null || !signatureHeader.startsWith(SIGNATURE_PREFIX)) {
+            return false;
+        }
+
+        String expectedSignature = SIGNATURE_PREFIX + calculateHmacSha256(payload, appSecret);
+        boolean valid = constantTimeEquals(expectedSignature, signatureHeader);
+
+        if (!valid) {
+            log.warn("WhatsApp webhook signature validation failed");
+        }
+
+        return valid;
+    }
+
     private String calculateHmacSha256(String data, String key) {
         try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            SecretKeySpec secretKeySpec = new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+            SecretKeySpec secretKeySpec = new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM);
             mac.init(secretKeySpec);
-            byte[] hash = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-            
-            // Convert byte array to Hex String
-            StringBuilder hexString = new StringBuilder();
-            for (byte b : hash) {
-                String hex = Integer.toHexString(0xff & b);
-                if (hex.length() == 1) hexString.append('0');
-                hexString.append(hex);
-            }
-            return hexString.toString();
+            return HexFormat.of().formatHex(mac.doFinal(data.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
-            throw new RuntimeException("Failed to calculate HMAC", e);
+            throw new IllegalStateException("Failed to calculate WhatsApp webhook signature", e);
+        }
+    }
+
+    private boolean constantTimeEquals(String expected, String actual) {
+        try {
+            return MessageDigest.isEqual(
+                    expected.getBytes(StandardCharsets.UTF_8),
+                    actual.getBytes(StandardCharsets.UTF_8)
+            );
+        } catch (Exception ex) {
+            if (ex instanceof NoSuchAlgorithmException) {
+                log.error("Required digest algorithm is unavailable", ex);
+            }
+            return false;
         }
     }
 }

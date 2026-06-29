@@ -8,8 +8,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.UUID;
-
 @RestController
 @RequestMapping("/api/payments")
 public class PaymentController {
@@ -20,14 +18,21 @@ public class PaymentController {
         this.adminTicketService = adminTicketService;
     }
 
-    // SIMULATING: Razorpay sending us a success webhook
     @PostMapping("/success/{ticketId}")
-    public ResponseEntity<String> handlePaymentSuccess(@PathVariable UUID ticketId) {
-        try {
-            Ticket paidTicket = adminTicketService.markPaymentSuccessful(ticketId);
-            return ResponseEntity.ok("Payment confirmed! Ticket " + paidTicket.getId() + " is now IN_PROGRESS.");
-        } catch (Exception e) {
-            return ResponseEntity.badRequest().body("Error processing payment: " + e.getMessage());
-        }
+    public ResponseEntity<String> handlePaymentSuccess(@PathVariable String ticketId) {
+        Ticket paidTicket = adminTicketService.markPaymentSuccessful(ticketId);
+        return ResponseEntity.ok("Payment confirmed! Ticket " + paidTicket.getId() + " is now IN_PROGRESS.");
+    }
+
+    @PostMapping("/{ticketId}/verify")
+    public ResponseEntity<String> verifyPayment(@PathVariable String ticketId) {
+        Ticket paidTicket = adminTicketService.markPaymentSuccessful(ticketId);
+        return ResponseEntity.ok("Payment verified and approved!");
+    }
+
+    @PostMapping("/{ticketId}/reject")
+    public ResponseEntity<String> rejectPayment(@PathVariable String ticketId) {
+        adminTicketService.rejectPaymentProof(ticketId);
+        return ResponseEntity.ok("Payment rejected.");
     }
 }
