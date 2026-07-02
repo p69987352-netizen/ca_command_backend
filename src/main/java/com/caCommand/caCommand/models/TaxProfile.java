@@ -27,6 +27,10 @@ public class TaxProfile {
     @Builder.Default private List<DeductorEntry> deductors = new ArrayList<>();
     @Builder.Default private List<SummaryTableRow> tisRows = new ArrayList<>();
     
+    @Builder.Default private List<String> ignoredEntries = new ArrayList<>();
+    private double totalProcessedIncome = 0.0;
+    private double totalAcceptedIncome = 0.0;
+    
     public double computeTotalGrossIncome() {
         return income.getTotalGrossIncome();
     }
@@ -72,9 +76,23 @@ public class TaxProfile {
             this.deductors.addAll(other.deductors);
         }
         if (other.tisRows != null && !other.tisRows.isEmpty()) {
-            this.tisRows.addAll(other.tisRows);
+            for (SummaryTableRow row : other.tisRows) {
+                boolean exists = this.tisRows.stream().anyMatch(r -> 
+                    r.getCategory().equalsIgnoreCase(row.getCategory()) &&
+                    Math.abs(r.getProcessedValue() - row.getProcessedValue()) < 0.01 &&
+                    Math.abs(r.getAcceptedValue() - row.getAcceptedValue()) < 0.01
+                );
+                if (!exists) {
+                    this.tisRows.add(row);
+                }
+            }
         }
         
+        if (other.ignoredEntries != null) {
+            this.ignoredEntries.addAll(other.ignoredEntries);
+        }
+        this.totalProcessedIncome = Math.max(this.totalProcessedIncome, other.totalProcessedIncome);
+        this.totalAcceptedIncome = Math.max(this.totalAcceptedIncome, other.totalAcceptedIncome);
         // Identity: prefer non-empty
         if (this.personalInfo.getPanNumber() == null || this.personalInfo.getPanNumber().isEmpty()) 
             this.personalInfo.setPanNumber(other.personalInfo.getPanNumber());

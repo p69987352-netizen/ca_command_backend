@@ -290,3 +290,107 @@ body {
     border-color: var(--gold);
     box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.2);
 }
+/* =========================================================
+   Mobile Responsiveness & Premium Overhaul
+   ========================================================= */
+
+/* Mobile Toggle Button */
+.mobile-toggle-btn {
+    display: none;
+    background: transparent;
+    border: none;
+    color: var(--dark);
+    font-size: 1.5rem;
+    cursor: pointer;
+    margin-right: 15px;
+    padding: 0;
+    transition: color 0.3s ease;
+}
+.mobile-toggle-btn:hover {
+    color: var(--gold);
+}
+
+/* Sidebar Mobile Overlay */
+.sidebar-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(2, 6, 23, 0.6);
+    backdrop-filter: blur(4px);
+    z-index: 90;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+}
+.sidebar-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Glassmorphism adjustments for cards */
+.stat-card, .card-table, .p-3.rounded {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+}
+
+/* Enhancing Table Responsiveness */
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Tablet & Mobile Media Queries */
+@media (max-width: 991px) {
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: -280px; /* Hide by default */
+        height: 100vh;
+        box-shadow: 5px 0 25px rgba(0,0,0,0.5);
+    }
+    
+    .sidebar.sidebar-open {
+        transform: translateX(280px); /* Slide in */
+    }
+
+    .mobile-toggle-btn {
+        display: block;
+    }
+
+    .topbar {
+        padding: 15px 20px;
+    }
+
+    .topbar-left {
+        display: flex;
+        align-items: center;
+    }
+
+    .topbar-title {
+        font-size: 1.25rem;
+    }
+
+    .topbar-subtitle {
+        display: none; /* Hide subtitle on small screens to save space */
+    }
+    
+    .stats-strip {
+        padding: 15px 20px;
+        flex-direction: column; /* Stack cards on mobile */
+    }
+    
+    .content-wrap {
+        padding: 0 20px 20px;
+    }
+    
+    .stat-card {
+        width: 100%;
+    }
+}
+
+/* Small Mobile tweaks */
+@media (max-width: 576px) {
+    .topbar-right .btn {
+        padding: 6px 12px;
+        font-size: 0.85rem;
+    }
+}

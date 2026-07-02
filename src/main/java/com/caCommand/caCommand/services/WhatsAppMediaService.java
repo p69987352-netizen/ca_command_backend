@@ -49,14 +49,16 @@ public class WhatsAppMediaService {
             byte[] fileBytes = fileResponse.getBody();
 
             if (fileBytes != null) {
-                // 🌟 3. MAGIC: Upload directly to Cloudinary instead of saving to Laptop!
                 String fileName = phoneNumber + "_" + mediaId; // Unique name
                 String s3Url = S3StorageService.uploadMedia(fileBytes, fileName);
 
-                log.info("Uploaded WhatsApp media to Cloudinary for phone={} mediaId={}", phoneNumber, mediaId);
-
-                // Return the LIVE web link so it saves in the database!
-                return s3Url;
+                if (s3Url != null) {
+                    log.info("Uploaded WhatsApp media to S3 for phone={} mediaId={}", phoneNumber, mediaId);
+                    return s3Url;
+                } else {
+                    log.error("Failed to upload WhatsApp media to S3 for phone={} mediaId={}", phoneNumber, mediaId);
+                    return null;
+                }
             }
 
         } catch (Exception e) {

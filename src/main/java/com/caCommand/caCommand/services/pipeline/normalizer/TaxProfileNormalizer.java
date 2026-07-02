@@ -1,21 +1,30 @@
 package com.caCommand.caCommand.services.pipeline.normalizer;
 
+import com.caCommand.caCommand.entities.TisCategoryMapping;
+import com.caCommand.caCommand.enums.CategoryType;
 import com.caCommand.caCommand.enums.DocumentType;
 import com.caCommand.caCommand.models.TaxProfile;
-import com.caCommand.caCommand.services.pipeline.parsers.models.ExtractionResult;
-import com.caCommand.caCommand.services.pipeline.parsers.models.ExtractedField;
+import com.caCommand.caCommand.repositories.TisCategoryMappingRepository;
 import com.caCommand.caCommand.services.pipeline.parsers.models.DeductorEntry;
+import com.caCommand.caCommand.services.pipeline.parsers.models.ExtractedField;
+import com.caCommand.caCommand.services.pipeline.parsers.models.ExtractionResult;
 import com.caCommand.caCommand.services.pipeline.parsers.models.SummaryTableRow;
-import com.caCommand.caCommand.services.pipeline.parsers.dictionary.KeywordDictionary;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 @Slf4j
 @Service
 public class TaxProfileNormalizer {
+
+    private final TisCategoryMappingRepository mappingRepository;
+
+    public TaxProfileNormalizer(TisCategoryMappingRepository mappingRepository) {
+        this.mappingRepository = mappingRepository;
+    }
 
     public TaxProfile normalize(ExtractionResult extraction, DocumentType sourceType) {
         TaxProfile profile = new TaxProfile();
@@ -28,36 +37,63 @@ public class TaxProfileNormalizer {
         profile.getPersonalInfo().setFinancialYear(getStringValue(fields, "financialYear", "fy"));
         profile.getPersonalInfo().setAssessmentYear(getStringValue(fields, "assessmentYear", "ay"));
         
+        // Load mappings
+        List<TisCategoryMapping> mappings = mappingRepository.findByEnabledTrueOrderByDisplayOrderAsc();
+
         // 2. Aggregate from Raw Lists (TIS Rows)
         for (SummaryTableRow row : extraction.getTisRows()) {
             String category = row.getCategory().toLowerCase().trim();
             double value = row.getBestValue();
             if (value <= 0) continue;
             
-            if (KeywordDictionary.matchesCategory(category, KeywordDictionary.SALARY_ALIASES)) {
-                profile.getIncome().setSalary(profile.getIncome().getSalary() + value);
-            } else if (KeywordDictionary.matchesCategory(category, KeywordDictionary.INTEREST_ALIASES)) {
-                if (category.contains("saving")) {
-                    profile.getIncome().setInterestSavings(profile.getIncome().getInterestSavings() + value);
-                } else if (category.contains("deposit")) {
-                    profile.getIncome().setInterestFd(profile.getIncome().getInterestFd() + value);
-                } else {
-                    profile.getIncome().setInterestOther(profile.getIncome().getInterestOther() + value);
+            Optional<TisCategoryMapping> matchedMapping = mappings.stream()
+                .filter(m -> category.contains(m.getKeyword().toLowerCase()))
+                .findFirst();
+
+            if (matchedMapping.isPresent()) {
+                TisCategoryMapping m = matchedMapping.get();
+                if (!m.getShouldAggregate() || m.getCategoryType() != CategoryType.INCOME) {
+                    profile.getIgnoredEntries().add(row.getCategory() + " (" + value + ") - Ignored based on DB rule: " + m.getKeyword());
+                    continue;
                 }
-            } else if (KeywordDictionary.matchesCategory(category, KeywordDictionary.DIVIDEND_ALIASES)) {
-                profile.getIncome().setDividend(profile.getIncome().getDividend() + value);
-            } else if (KeywordDictionary.matchesCategory(category, KeywordDictionary.RENT_ALIASES)) {
-                profile.getIncome().setRent(profile.getIncome().getRent() + value);
-            } else if (KeywordDictionary.matchesCategory(category, KeywordDictionary.CAPITAL_GAIN_ALIASES)) {
-                profile.getIncome().setCapitalGainsStcg(profile.getIncome().getCapitalGainsStcg() + value); // Rough mapping
-            } else if (KeywordDictionary.matchesCategory(category, KeywordDictionary.BUSINESS_ALIASES)) {
-                if (category.contains("gst")) {
-                    profile.getIncome().setGstTurnover(profile.getIncome().getGstTurnover() + value);
-                } else {
-                    profile.getIncome().setBusiness(profile.getIncome().getBusiness() + value);
+
+                switch (m.getIncomeCategory()) {
+                    case SALARY:
+                        profile.getIncome().setSalary(profile.getIncome().getSalary() + value);
+                        break;
+                    case INTEREST_SAVINGS:
+                        profile.getIncome().setInterestSavings(profile.getIncome().getInterestSavings() + value);
+                        break;
+                    case INTEREST_FD:
+                        profile.getIncome().setInterestFd(profile.getIncome().getInterestFd() + value);
+                        break;
+                    case INTEREST_OTHER:
+                        profile.getIncome().setInterestOther(profile.getIncome().getInterestOther() + value);
+                        break;
+                    case DIVIDEND:
+                        profile.getIncome().setDividend(profile.getIncome().getDividend() + value);
+                        break;
+                    case RENT:
+                        profile.getIncome().setRent(profile.getIncome().getRent() + value);
+                        break;
+                    case CAPITAL_GAINS:
+                        profile.getIncome().setCapitalGainsStcg(profile.getIncome().getCapitalGainsStcg() + value);
+                        break;
+                    case BUSINESS:
+                        profile.getIncome().setBusiness(profile.getIncome().getBusiness() + value);
+                        break;
+                    case GST_TURNOVER:
+                        profile.getIncome().setGstTurnover(profile.getIncome().getGstTurnover() + value);
+                        break;
+                    case OTHER:
+                        profile.getIncome().setOther(profile.getIncome().getOther() + value);
+                        break;
+                    default:
+                        break;
                 }
             } else {
                 profile.getIncome().setOther(profile.getIncome().getOther() + value);
+                log.warn("Unmapped TIS category: {}", category);
             }
         }
         

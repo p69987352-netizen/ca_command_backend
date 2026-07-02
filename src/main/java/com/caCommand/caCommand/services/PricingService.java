@@ -169,14 +169,12 @@ public class PricingService {
         com.caCommand.caCommand.entities.PricingRule rule = pricingRuleRepository.findByServiceTypeAndIsActiveTrue(normalizedServiceType)
             .orElseGet(() -> {
                 com.caCommand.caCommand.entities.PricingRule defaultRule = new com.caCommand.caCommand.entities.PricingRule();
-                defaultRule.setBasePrice(1499.0);
-                defaultRule.setComplexityMultiplier(1.0);
+                defaultRule.setBaseFee(1499.0);
                 return defaultRule;
             });
 
-        double baseFee = rule.getBasePrice();
-        double multiplier = rule.getComplexityMultiplier();
-        double calculatedFee = baseFee * multiplier;
+        double baseFee = rule.getBaseFee();
+        double calculatedFee = baseFee;
 
         ticket.setCardRateFee(calculatedFee);
         ticket.setDiscountPercent(25);

@@ -56,6 +56,7 @@ public class ChatBotService {
     private final WhatsAppMessageSender whatsappMessageSender;
     private final WhatsAppMediaService whatsappMediaService;
     private final StaffRepository staffRepository;
+    private final com.caCommand.caCommand.repositories.StaffSessionRepository staffSessionRepository;
     private final GeminiService geminiService;
     private final LocationService locationService;
     private final LegacyDocumentExtractionService documentExtractionService;
@@ -68,13 +69,14 @@ public class ChatBotService {
     private final Map<String, ScheduledFuture<?>> pendingMessages = new ConcurrentHashMap();
 
     @Autowired
-    public ChatBotService(ChatSessionRepository sessionRepository, ClientRepository clientRepository, TicketRepository ticketRepository, WhatsAppMessageSender whatsappMessageSender, WhatsAppMediaService whatsappMediaService, StaffRepository staffRepository, GeminiService geminiService, LocationService locationService, LegacyDocumentExtractionService documentExtractionService, SimpMessagingTemplate messagingTemplate, CustomDocumentRequestRepository customDocumentRequestRepository, S3StorageService s3StorageService, PipelineOrchestrator pipelineOrchestrator, ApplicationEventPublisher eventPublisher) {
+    public ChatBotService(ChatSessionRepository sessionRepository, ClientRepository clientRepository, TicketRepository ticketRepository, WhatsAppMessageSender whatsappMessageSender, WhatsAppMediaService whatsappMediaService, StaffRepository staffRepository, com.caCommand.caCommand.repositories.StaffSessionRepository staffSessionRepository, GeminiService geminiService, LocationService locationService, LegacyDocumentExtractionService documentExtractionService, SimpMessagingTemplate messagingTemplate, CustomDocumentRequestRepository customDocumentRequestRepository, S3StorageService s3StorageService, PipelineOrchestrator pipelineOrchestrator, ApplicationEventPublisher eventPublisher) {
         this.sessionRepository = sessionRepository;
         this.clientRepository = clientRepository;
         this.ticketRepository = ticketRepository;
         this.whatsappMessageSender = whatsappMessageSender;
         this.whatsappMediaService = whatsappMediaService;
         this.staffRepository = staffRepository;
+        this.staffSessionRepository = staffSessionRepository;
         this.geminiService = geminiService;
         this.locationService = locationService;
         this.documentExtractionService = documentExtractionService;
@@ -102,7 +104,6 @@ public class ChatBotService {
         return saved;
     }
 
-    @Transactional
     public void processUserMessage(String phoneNumber, String messageType, String messageContent) {
         Staff staff = this.staffRepository.findByPhoneNumber(phoneNumber).orElse(null);
         if (staff != null) {
@@ -252,7 +253,7 @@ public class ChatBotService {
                     session.setCurrentState(ChatState.FINISHED);
                     this.sessionRepository.save(session);
                     
-                    this.send(phoneNumber, session, "Thank you. Our team will call you shortly.");
+                    this.send(phoneNumber, session, "Thank you. Our tax expert will contact you shortly. Reference ID: " + ticket.getCaseId());
                     break;
                 }
                 Ticket ticket = this.createTicket(client, selectedService, session);
@@ -270,13 +271,20 @@ public class ChatBotService {
                 this.saveAndBroadcast(callTicket);
                 session.setCurrentState(ChatState.FINISHED);
                 this.sessionRepository.save(session);
-                this.send(phoneNumber, session, "\u2705 Your " + session.getExtractedService() + " Consultation Has Been Scheduled\n\nOne of our tax specialists will review your case and reach out shortly.");
+                this.send(phoneNumber, session, "\u2705 Your " + session.getExtractedService() + " Consultation Has Been Scheduled\n\nOne of our tax specialists will review your case and reach out shortly.\nReference ID: " + callTicket.getCaseId());
                 break;
             }
             default: {
-                this.sendWelcomeNew(phoneNumber, session);
-                session.setCurrentState(ChatState.NEW);
-                this.sessionRepository.save(session);
+                if (client.getName() != null && !client.getName().isBlank()) {
+                    session.setClientName(client.getName());
+                    session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
+                    this.sessionRepository.save(session);
+                    this.send(phoneNumber, session, "Welcome back " + client.getName() + " \ud83d\udc4b\n\nHow can we assist you today?\n\n1\ufe0f\u20e3 ITR Filing\n2\ufe0f\u20e3 GST Services\n3\ufe0f\u20e3 Notice / Appeal\n4\ufe0f\u20e3 Tax Advisory");
+                } else {
+                    this.sendWelcomeNew(phoneNumber, session);
+                    session.setCurrentState(ChatState.NEW);
+                    this.sessionRepository.save(session);
+                }
             }
         }
     }
@@ -427,6 +435,8 @@ public class ChatBotService {
             result = new DocumentVerificationResult(true, "TIS Statement (PDF)", "TIS Statement identified by filename");
         } else if (upperFileName.contains("AIS")) {
             result = new DocumentVerificationResult(true, "AIS Statement (PDF)", "AIS Statement identified by filename");
+        } else if (upperFileName.contains("26AS")) {
+            result = new DocumentVerificationResult(true, "Form 26AS", "Form 26AS identified by filename");
         } else {
             result = this.geminiService.verifyClientDocument(cloudinaryUrl, ticket.getServiceType(), false);
         }
@@ -527,17 +537,42 @@ public class ChatBotService {
     }
 
     private void sendDocumentChecklist(String phoneNumber, ChatSession session, Ticket ticket, boolean newlyCreated) {
-        String clientName = ticket.getClient() != null ? this.nullToDefault(ticket.getClient().getName(), "") : "";
-        String serviceType = ticket.getServiceType();
-        String message = this.getDetailedDocumentTemplate(serviceType, clientName);
+        String message = this.getDetailedDocumentTemplate(ticket);
         this.send(phoneNumber, session, message);
     }
 
-    private String getDetailedDocumentTemplate(String serviceType, String clientName) {
+    private String getDetailedDocumentTemplate(Ticket ticket) {
+        String serviceType = ticket.getServiceType();
+        String caseIdStr = ticket.getCaseId() != null ? ticket.getCaseId() : "Pending";
+        String clientName = ticket.getClient() != null ? this.nullToDefault(ticket.getClient().getName(), "") : "";
         String nameStr = this.isBlank(clientName) ? "Client" : clientName;
+        
         switch (serviceType) {
             case "ITR Filing": {
-                return String.format("\ud83d\udccb %s, ITR Filing ke liye following documents upload karein:\n\nRequired Documents:\n\u2713 PAN Card\n\u2713 Aadhaar Card\n\u2713 AIS Statement (PDF)\n\u2713 TIS Statement (PDF)\n\u2713 Form 26AS\n\u2713 Bank Statement (Last 1 Year)\n\nAdditional Documents (If Applicable):\n\u2713 Form 16\n\u2713 Capital Gain Statement\n\u2713 Mutual Fund Statement\n\u2713 Rental Income Documents\n\u2713 Investment Proofs (80C/80D)\n\n\ud83d\udcce Aap documents photo ya PDF format mein upload kar sakte hain.\n", nameStr);
+                return String.format(
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n" +
+                        "\ud83d\udcc4 ITR Filing\n" +
+                        "Reference %s\n" +
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n" +
+                        "Required\n" +
+                        "\u2705 PAN\n" +
+                        "\u2705 Aadhaar\n" +
+                        "\u2705 Form 16\n" +
+                        "\u2b1c AIS\n" +
+                        "\u2b1c TIS\n" +
+                        "\u2b1c 26AS\n" +
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n" +
+                        "\u26a0\ufe0f Important\n" +
+                        "Upload only original PDF downloaded from Income Tax Portal.\n\n" +
+                        "Do NOT send\n" +
+                        "\u274c Screenshot\n" +
+                        "\u274c Scan Copy\n" +
+                        "\u274c Printed Photo\n" +
+                        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n" +
+                        "\ud83d\udce5 Income Tax Portal\n" +
+                        "https://www.incometax.gov.in\n",
+                        caseIdStr
+                );
             }
             case "Tax Notice / Appeal": {
                 return String.format("\ud83d\udccb %s, Tax Notice / Appeal review ke liye following documents upload karein:\n\nRequired Documents:\n\u2713 Notice PDF\n\u2713 Assessment Order\n\u2713 Previous ITR Copy\n\u2713 Previous Response Submitted (if any)\n\nAdditional Documents:\n\u2713 Demand Order\n\u2713 Appeal Order\n\u2713 Supporting Documents\n\u2713 CA Correspondence\n\n\ud83d\udcce Agar koi document available nahi hai to jo available ho wahi upload karein.\n\ud83e\udd16 Arjun AI notice risk, due dates aur suggested actions identify karega.\n", nameStr);
@@ -565,54 +600,120 @@ public class ChatBotService {
     }
 
     private void handleStaffWorkflow(Staff staff, String messageType, String messageContent) {
-        List<Ticket> activeTickets = this.ticketRepository.findByAssignedStaffIdAndStatusIn(staff.getId(), STAFF_ACTIVE_STATUSES);
-        if (activeTickets.isEmpty()) {
-            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "\u2139\ufe0f Aapke paas abhi koi active assigned file nahi hai.\n\nAdmin assign karega tab notification aayega.");
+        String input = messageContent.trim();
+        String inputUpper = input.toUpperCase(Locale.ROOT);
+        
+        com.caCommand.caCommand.entities.StaffSession staffSession = this.staffSessionRepository.findByStaffId(staff.getId())
+            .orElseGet(() -> {
+                com.caCommand.caCommand.entities.StaffSession s = new com.caCommand.caCommand.entities.StaffSession();
+                s.setStaffId(staff.getId());
+                return s;
+            });
+
+        // Global Commands
+        if (inputUpper.equals("LIST")) {
+            List<Ticket> activeTickets = this.ticketRepository.findByAssignedStaffIdAndStatusIn(staff.getId(), STAFF_ACTIVE_STATUSES);
+            if (activeTickets.isEmpty()) {
+                this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "ℹ️ Aapke paas abhi koi active assigned file nahi hai.");
+                return;
+            }
+            StringBuilder sb = new StringBuilder("📋 *Pending Dashboard*\n\n");
+            for (Ticket t : activeTickets) {
+                String clientName = t.getClient() != null ? this.nullToDefault(t.getClient().getName(), t.getClient().getPhoneNumber()) : "-";
+                sb.append(String.format("• %s | %s | %s\n", t.getCaseId() != null ? t.getCaseId() : "Pending", clientName, t.getServiceType()));
+            }
+            sb.append("\nType *SELECT CASE-XXXX* to open a file.");
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), sb.toString());
             return;
         }
-        Ticket workingTicket = activeTickets.get(0);
+
+        if (inputUpper.startsWith("SELECT ")) {
+            String caseId = inputUpper.substring(7).trim();
+            Ticket ticket = this.ticketRepository.findByCaseId(caseId).orElse(null);
+            if (ticket == null || !staff.getId().equals(ticket.getAssignedStaff() != null ? ticket.getAssignedStaff().getId() : null)) {
+                this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "❌ Invalid Case ID or not assigned to you.");
+                return;
+            }
+            staffSession.setActiveCaseId(caseId);
+            staffSession.setSelectedAt(LocalDateTime.now());
+            staffSession.setExpiresAt(LocalDateTime.now().plusMinutes(30));
+            this.staffSessionRepository.save(staffSession);
+            
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Selected " + caseId + "\n\n" + this.staffStatusMessage(ticket));
+            return;
+        }
+
+        // Session validation for Context-aware commands
+        if (staffSession.getActiveCaseId() == null || staffSession.getExpiresAt() == null || staffSession.getExpiresAt().isBefore(LocalDateTime.now())) {
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "⚠️ Session expired or no case selected.\nPlease type *LIST* and then *SELECT CASE-XXXX*.");
+            return;
+        }
+        
+        Ticket workingTicket = this.ticketRepository.findByCaseId(staffSession.getActiveCaseId()).orElse(null);
+        if (workingTicket == null) {
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "❌ Case not found.");
+            return;
+        }
+        
+        // Refresh session
+        staffSession.setSelectedAt(LocalDateTime.now());
+        staffSession.setExpiresAt(LocalDateTime.now().plusMinutes(30));
+        staffSession.setLastCommand(inputUpper);
+        this.staffSessionRepository.save(staffSession);
+
         String clientPhoneNumber = workingTicket.getClient().getPhoneNumber();
         String clientDisplay = this.nullToDefault(workingTicket.getClient().getName(), clientPhoneNumber);
+
         if ("document".equals(messageType) || "image".equals(messageType)) {
             String savedFilePath = this.whatsappMediaService.downloadAndSaveMedia(messageContent, staff.getPhoneNumber());
             if (savedFilePath == null) {
-                this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "\u274c Document upload fail ho gaya. Dobara try karo.");
+                this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "❌ Document upload fail ho gaya. Dobara try karo.");
                 return;
             }
             workingTicket.setStaffSubmittedDocument(savedFilePath);
             workingTicket.setStatus(TicketStatus.PENDING_ADMIN_QC.name());
             workingTicket.setProgressPercent(90);
             this.saveAndBroadcast(workingTicket);
-            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "\u2705 Work submitted for admin QC review.\n\nAdmin review ke baad client ko deliver kar dega.");
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Work submitted for admin QC review for " + workingTicket.getCaseId());
+            
+            // Auto-archive session
+            staffSession.setActiveCaseId(null);
+            this.staffSessionRepository.save(staffSession);
             return;
         }
-        if (!"text".equals(messageType)) {
-            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "Commands:\nSTATUS \u2014 current file info\nREQUEST: [document name] \u2014 client se maango\nQUERY: [question] \u2014 client ko puchho\nDONE \u2014 work complete (final PDF upload karo)\n\nOr final PDF/image directly upload karo.");
-            return;
-        }
-        String input = messageContent.trim();
-        String inputUpper = input.toUpperCase(Locale.ROOT);
-        if (inputUpper.equals("STATUS") || inputUpper.equals("HI") || inputUpper.equals("HII") || inputUpper.equals("HELLO")) {
+
+        if (inputUpper.equals("INFO") || inputUpper.equals("STATUS")) {
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), this.staffStatusMessage(workingTicket));
-        } else if (inputUpper.startsWith("REQUEST:") || inputUpper.startsWith("NEED ")) {
-            String needed = inputUpper.startsWith("NEED ") ? input.substring(5).trim() : input.substring(input.indexOf(":") + 1).trim();
+        } else if (inputUpper.equals("NEED")) {
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "Select document to request:\n1. PAN Card\n2. Aadhaar Card\n3. AIS\n4. TIS\n5. Form 16\n6. Other\n\nReply with *NEED [Number]* or *NEED [Doc Name]*");
+        } else if (inputUpper.startsWith("NEED ")) {
+            String needed = input.substring(5).trim();
+            switch (needed) {
+                case "1": needed = "PAN Card"; break;
+                case "2": needed = "Aadhaar Card"; break;
+                case "3": needed = "AIS"; break;
+                case "4": needed = "TIS"; break;
+                case "5": needed = "Form 16"; break;
+            }
             String clientMsg = String.format("📋 CA team ko aapki file ke liye ek document ki zarurat hai:\n\n*Document:* %s\n\nKripya yahi WhatsApp par uski photo/PDF bhej dijiye.", needed);
             this.whatsappMessageSender.sendMessage(clientPhoneNumber, clientMsg);
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Document request sent to client: " + clientDisplay);
-        } else if (inputUpper.startsWith("QUERY:") || inputUpper.startsWith("ASK ")) {
-            String query = inputUpper.startsWith("ASK ") ? input.substring(4).trim() : input.substring(input.indexOf(":") + 1).trim();
+        } else if (inputUpper.startsWith("ASK ")) {
+            String query = input.substring(4).trim();
             String clientMsg = String.format("❓ CA team ka sawaal:\n\n%s\n\nPlease yahin reply karein.", query);
             this.whatsappMessageSender.sendMessage(clientPhoneNumber, clientMsg);
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Query sent to " + clientDisplay);
-        } else if (inputUpper.startsWith("UPDATE:")) {
-            String update = input.substring(input.indexOf(":") + 1).trim();
-            workingTicket.setStaffUpdate(this.appendLog(workingTicket.getStaffUpdate(), update));
+        } else if (inputUpper.startsWith("NOTE ")) {
+            String note = input.substring(5).trim();
+            workingTicket.setStaffUpdate(this.appendLog(workingTicket.getStaffUpdate(), note));
             this.saveAndBroadcast(workingTicket);
-            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "\u2705 Update saved.");
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Internal note saved to timeline.");
         } else if (inputUpper.equals("DONE")) {
-            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "\u2705 Work done record ho gaya.\n\nFinal PDF/image upload karo taaki admin QC ke baad client ko deliver ho sake.");
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "To mark DONE, please upload the final PDF/Image directly here.");
+        } else if (inputUpper.equals("HELP")) {
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "🛠 *Commands:*\nLIST - Show pending\nSELECT CASE-XXXX - Open file\nINFO - Case details\nNEED [doc] - Request doc\nASK [query] - Ask client\nNOTE [msg] - Add internal note\nDONE - Upload final work");
         } else {
-            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), this.staffStatusMessage(workingTicket) + "\n\n🛠 *Available Commands:*\n• *NEED [doc name]* ➔ Client se document mangwane ke liye\n• *ASK [question]* ➔ Client se question poochne ke liye\n• *STATUS* ➔ Current details dekhne ke liye\n\n✅ *How to submit work:*\nJust upload the final PDF/Image directly here. Wo apne aap submit ho jayega!");
+             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "⚠️ Invalid command. Type HELP for commands.");
         }
     }
 
@@ -653,8 +754,14 @@ public class ChatBotService {
         ticket.setClient(client);
         ticket.setServiceType(serviceType);
         ticket.setStatus(TicketStatus.PENDING_ADMIN_APPROVAL.name());
+        
+        String dateStr = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMdd"));
+        String randomNum = String.format("%04d", new java.util.Random().nextInt(10000));
+        ticket.setCaseId("CASE-" + dateStr + "-" + randomNum);
+        ticket.setCaseStage(com.caCommand.caCommand.enums.CaseStage.ONBOARDING);
+        
         Ticket saved = this.saveAndBroadcast(ticket);
-        log.info("Created ticket id={} client={} service={}", new Object[]{saved.getId(), client.getId(), serviceType});
+        log.info("Created ticket caseId={} client={} service={}", new Object[]{saved.getCaseId(), client.getId(), serviceType});
         return saved;
     }
 

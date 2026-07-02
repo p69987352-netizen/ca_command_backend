@@ -7,6 +7,13 @@ public record AssignTicketRequest(
         String priority,
 
         @Size(max = 1000, message = "Notes must be 1000 characters or fewer")
-        String notes
+        String notes,
+        
+        String deadline,
+        String language,
+        String expectedDuration,
+        String category,
+        String urgency,
+        String remarks
 ) {
 }

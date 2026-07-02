@@ -313,7 +313,7 @@ public class GeminiService {
                 PdfParseResult pdfResult = parsePdf(imageUrl, null);
                 
                 if (pdfResult.isPasswordProtected) {
-                    return new DocumentVerificationResult(true, "AIS Statement (PDF)", "Password protected PDF accepted.");
+                    return new DocumentVerificationResult(true, "Password Protected Document", "Password protected PDF accepted.");
                 }
                 
                 if (!isBlank(pdfResult.text)) {

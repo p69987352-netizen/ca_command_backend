@@ -22,7 +22,7 @@ public class LegacyPricingEngineService {
         double basePrice = 1499.0;
         
         if (ruleOpt.isPresent()) {
-            basePrice = ruleOpt.get().getBasePrice();
+            basePrice = ruleOpt.get().getBaseFee();
         }
 
         double finalFee = basePrice;

@@ -39,9 +39,21 @@ public class SummaryResponseDto {
     // New fields for Client 360 View
     private AIAnalysis aiAnalysis;
     private List<PaymentHistory> paymentHistory;
-    private List<ClientHistory> previousCases;
+    
+    @Data
+    public static class TicketHistoryDto {
+        private String id;
+        private String serviceType;
+        private String status;
+        private Double fee;
+        private String assignedStaffName;
+        private String createdAt;
+    }
+    
+    private List<TicketHistoryDto> previousTickets;
     
     // Customer Intelligence
+    private String serviceType;
     private Double lifetimeRevenue;
     private Integer totalPreviousCases;
     private String lastServiceName;

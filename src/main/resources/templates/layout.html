@@ -16,6 +16,9 @@
 <!-- Golden Particle Overlay -->
 <div class="particle-overlay" id="particleOverlay"></div>
 
+<!-- Sidebar Mobile Overlay Backdrop -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
 <!-- =========================================================
      SIDEBAR — Ancient War Council
      ========================================================= -->
@@ -82,8 +85,13 @@
 <main class="main-content">
     <header class="topbar">
         <div class="topbar-left">
-            <h4 id="pageTitle" class="topbar-title" th:text="${pageTitle} ?: 'Active Client Work'">Active Client Work</h4>
-            <p id="pageSubtitle" class="topbar-subtitle" th:text="${pageSubtitle} ?: 'Track client files, approvals, payments and delivery.'">Track client files, approvals, payments and delivery.</p>
+            <button class="mobile-toggle-btn" onclick="toggleSidebar()">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+            <div>
+                <h4 id="pageTitle" class="topbar-title" th:text="${pageTitle} ?: 'Active Client Work'">Active Client Work</h4>
+                <p id="pageSubtitle" class="topbar-subtitle" th:text="${pageSubtitle} ?: 'Track client files, approvals, payments and delivery.'">Track client files, approvals, payments and delivery.</p>
+            </div>
         </div>
         <div class="topbar-right">
             <button class="btn btn-outline-secondary btn-sm" id="refreshBtn" onclick="window.location.reload()">
@@ -118,6 +126,13 @@
         overlay.appendChild(particle);
     }
 })();
+
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    sidebar.classList.toggle('sidebar-open');
+    overlay.classList.toggle('active');
+}
 </script>
 </body>
 </html>

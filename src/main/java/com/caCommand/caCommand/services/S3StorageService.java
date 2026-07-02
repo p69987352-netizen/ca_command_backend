@@ -42,6 +42,7 @@ public class S3StorageService implements StorageService {
         AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKey, secretKey);
         S3ClientBuilder builder = S3Client.builder()
                 .region(Region.of(region))
+                .crossRegionAccessEnabled(true)
                 .credentialsProvider(StaticCredentialsProvider.create(credentials));
         
         if (endpointUrl != null && !endpointUrl.isBlank()) {
@@ -88,8 +89,11 @@ public class S3StorageService implements StorageService {
             // Return the S3 URI format so we can identify it later for presigning
             // Format: s3://bucketName/keyName
             return "s3://" + bucketName + "/" + keyName;
+        } catch (software.amazon.awssdk.services.s3.model.S3Exception e) {
+            log.warn("S3 upload failed for fileName={}. AWS Error: {} (Status: {})", fileName, e.awsErrorDetails().errorMessage(), e.statusCode());
+            return null;
         } catch (Exception e) {
-            log.warn("S3 upload failed for fileName={}", fileName, e);
+            log.warn("S3 upload failed for fileName={}. Error: {}", fileName, e.getMessage());
             return null;
         }
     }

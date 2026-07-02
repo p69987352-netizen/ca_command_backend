@@ -267,7 +267,8 @@ public class PipelineOrchestrator {
             TaxProfile logicProfile = tisOnlyProfile.getDocuments().getSourcesUsed().isEmpty() ? mergedProfile : tisOnlyProfile;
 
             // ===== ITR RECOMMENDATION =====
-            String itrForm = itrRecommendationEngine.recommend(logicProfile);
+            com.caCommand.caCommand.models.ItrRecommendation itrRec = itrRecommendationEngine.recommend(logicProfile);
+            String itrForm = itrRec.getRecommendedItr();
             
             if (context.isCancelled()) return;
             workflowEngineService.transition(ticket, com.caCommand.caCommand.enums.PipelineStatus.RULE_ENGINE);
@@ -286,10 +287,10 @@ public class PipelineOrchestrator {
             workflowEngineService.transition(ticket, com.caCommand.caCommand.enums.PipelineStatus.PRICING);
             
             // ===== SMART PRICING =====
-            PricingEngineService.PricingResult pricingResult = pricingService.calculateFromProfile(logicProfile, itrForm);
+            com.caCommand.caCommand.dto.PricingAnalysisDto pricingResult = pricingService.calculateFromProfile(logicProfile, itrForm);
 
             // Save everything
-            saveExtractedDataAndUpdateTicket(ticketId, mergedProfile, itrForm, pricingResult.getFinalPrice());
+            saveExtractedDataAndUpdateTicket(ticketId, mergedProfile, itrForm, pricingResult.getRecommendedFee());
 
             workflowEngineService.transition(ticket, com.caCommand.caCommand.enums.PipelineStatus.SUCCESS);
             
@@ -298,11 +299,11 @@ public class PipelineOrchestrator {
             
             // Keep status as PENDING_ADMIN_APPROVAL (Do not automatically transition to AWAITING_PAYMENT)
             workflowEngineService.transition(ticket, com.caCommand.caCommand.enums.TicketStatus.PENDING_ADMIN_APPROVAL);
-            ticket.setQuotedFee(pricingResult.getFinalPrice());
+            ticket.setQuotedFee(pricingResult.getRecommendedFee());
             ticketRepository.save(ticket);
             
             log.info("Pipeline completed for ticket: {} | ITR={} | Price=INR {} | Complexity={}/10",
-                    ticketId, itrForm, pricingResult.getFinalPrice(), complexity.getScore());
+                    ticketId, itrForm, pricingResult.getRecommendedFee(), complexity.getScore());
 
         } catch (Exception e) {
             log.error("Pipeline failed for ticket: {}", ticketId, e);
@@ -540,7 +541,7 @@ public class PipelineOrchestrator {
         return new HashMap<>();
     }
     private void prettyPrintFinalResult(TaxProfile profile, String itrForm, 
-                                        PricingEngineService.PricingResult pricing, 
+                                        com.caCommand.caCommand.dto.PricingAnalysisDto pricing, 
                                         ComplexityEngine.ComplexityResult complexity, 
                                         int fieldCount, 
                                         java.util.List<String> crossWarnings) {
@@ -569,7 +570,7 @@ public class PipelineOrchestrator {
         log.info("║──────────────────────────────────────────────────────────────────║");
         log.info(String.format("║ ITR Form:            %-44s║", itrForm));
         log.info(String.format("║ Complexity:          %-44s║", complexity.getScore() + "/10 (" + complexity.getLevel() + ")"));
-        log.info(String.format("║ Quoted Fee:          INR %-40s║", pricing.getFinalPrice()));
+        log.info(String.format("║ Quoted Fee:          INR %-40s║", pricing.getRecommendedFee()));
         log.info(String.format("║ Fields Extracted:    %-44s║", fieldCount));
         log.info(String.format("║ Confidence:          %-44s║", profile.getValidation().getConfidenceScore() + "%"));
         log.info("╠══════════════════════════════════════════════════════════════════╣");

@@ -8,44 +8,32 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "pricing_rules")
+@Table(name = "complexity_rules")
 @Data
 @lombok.EqualsAndHashCode(callSuper=false)
-public class PricingRule extends BaseEntity {
+public class ComplexityRule extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, length = 100)
-    private String serviceType;
+    @Column(unique = true, nullable = false, length = 100)
+    private String code; // e.g. CAPITAL_GAIN
 
-    @Column(length = 50)
-    private String itrType;
-
-    @Column(nullable = false)
-    private Double baseFee;
-
-    @Column
-    private Double minFee;
-
-    @Column
-    private Double maxFee;
-
-    @Column
-    private Double defaultDiscount;
+    @Column(nullable = false, length = 150)
+    private String displayName; // e.g. Capital Gain Analysis
 
     @Column(nullable = false)
-    private Boolean isActive = true;
+    private Double amount;
 
-    @Column
-    private LocalDateTime effectiveFrom;
+    @Column(nullable = false)
+    private Integer priority;
 
-    @Column
-    private LocalDateTime effectiveTo;
+    @Column(length = 255)
+    private String description;
 
-    @Column
-    private Integer version = 1;
+    @Column(nullable = false)
+    private Boolean isEnabled = true;
 
     @CreationTimestamp
     private LocalDateTime createdAt;

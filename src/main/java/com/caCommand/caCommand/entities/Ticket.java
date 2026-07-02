@@ -60,6 +60,13 @@ public class Ticket extends BaseEntity {
     @JoinColumn(name = "staff_id")
     private Staff assignedStaff;
 
+    @Column(unique = true, length = 20)
+    private String caseId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 30)
+    private com.caCommand.caCommand.enums.CaseStage caseStage;
+
     @Column(columnDefinition = "text")
     private String clientDocuments;
 

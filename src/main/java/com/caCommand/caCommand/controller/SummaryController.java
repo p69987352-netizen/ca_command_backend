@@ -108,7 +108,12 @@ public class SummaryController {
         }
 
         if (!tickets.isEmpty()) {
-            Ticket latestTicket = tickets.get(0);
+            Ticket latestTicket = tickets.stream()
+                .filter(t -> !"FINISHED".equalsIgnoreCase(t.getStatus()) && !"CLOSED".equalsIgnoreCase(t.getStatus()))
+                .findFirst()
+                .orElse(tickets.get(0));
+            
+            response.setServiceType(latestTicket.getServiceType());
             response.setLatestTicketId(latestTicket.getId().toString());
             response.setStatus(latestTicket.getStatus());
             response.setFeeQuoted(latestTicket.getQuotedFee());
@@ -129,8 +134,23 @@ public class SummaryController {
         List<PaymentHistory> paymentHistory = paymentHistoryRepository.findByClientIdOrderByCreatedAtDesc(id);
         response.setPaymentHistory(paymentHistory);
 
-        List<ClientHistory> previousCases = clientHistoryRepository.findByClientIdOrderByCompletionDateDesc(id);
-        response.setPreviousCases(previousCases);
+        List<SummaryResponseDto.TicketHistoryDto> previousTickets = tickets.stream().map(t -> {
+            SummaryResponseDto.TicketHistoryDto dto = new SummaryResponseDto.TicketHistoryDto();
+            dto.setId(t.getId().toString());
+            dto.setServiceType(t.getServiceType());
+            dto.setStatus(t.getStatus());
+            dto.setFee(t.getAdminFinalFee() != null ? t.getAdminFinalFee() : t.getQuotedFee());
+            dto.setAssignedStaffName(t.getAssignedStaff() != null ? t.getAssignedStaff().getName() : "Unassigned");
+            
+            if (t.getCreatedAt() != null) {
+                java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy");
+                dto.setCreatedAt(t.getCreatedAt().format(formatter));
+            } else {
+                dto.setCreatedAt("");
+            }
+            return dto;
+        }).toList();
+        response.setPreviousTickets(previousTickets);
         
         // Populate Customer Intelligence Fields
         if (client.getTotalRevenueGenerated() != null) {

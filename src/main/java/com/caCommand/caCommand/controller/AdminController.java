@@ -132,9 +132,7 @@ public class AdminController {
             @PathVariable String staffId,
             @Valid @RequestBody(required = false) AssignTicketRequest payload
     ) {
-        String priority = payload != null ? payload.priority() : "Normal";
-        String notes = payload != null && payload.notes() != null ? payload.notes() : "";
-        return ResponseEntity.ok(adminTicketService.assignToStaff(ticketId, staffId, priority, notes));
+        return ResponseEntity.ok(adminTicketService.assignToStaff(ticketId, staffId, payload));
     }
 
     @PostMapping("/tickets/{ticketId}/submit-qc")
@@ -258,12 +256,15 @@ public class AdminController {
     @PostMapping("/staff")
     public ResponseEntity<Staff> addStaff(@Valid @RequestBody StaffRequest staffRequest) {
         Staff newStaff = staffService.addStaffMember(staffRequest.getName(), staffRequest.getPhoneNumber());
-        String welcomeMsg = "🎉 *WELCOME TO CA COMMAND CENTER*\n\n" +
-                "Hi *" + newStaff.getName() + "*," +
-                " you have been successfully added as a Staff Member ✅\n\n" +
-                "All assigned tasks will come directly here on WhatsApp.\n\n" +
-                "Commands:\nSTATUS — view current file\nREQUEST: [doc] — ask client\nQUERY: [question] — ask client\nUPDATE: [note] — save progress";
-        whatsappMessageSender.sendMessage(newStaff.getPhoneNumber(), welcomeMsg);
+        
+        // Use template message for staff welcome to bypass 24-hour window
+        whatsappMessageSender.sendTemplateMessage(
+                newStaff.getPhoneNumber(),
+                "staff_welcome",
+                "en",
+                java.util.List.of(newStaff.getName())
+        );
+        
         return ResponseEntity.ok(newStaff);
     }
 

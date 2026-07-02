@@ -13,6 +13,7 @@ import java.util.UUID;
 
 @Repository
 public interface TicketRepository extends JpaRepository<Ticket, UUID> {
+    Optional<Ticket> findByCaseId(String caseId);
 
     List<Ticket> findByStatus(String status);
 

@@ -356,13 +356,16 @@ public class AdminTicketService {
     }
 
     @Transactional
-    public Ticket assignToStaff(String ticketId, String staffIdentifier, String priority, String notes) {
+    public Ticket assignToStaff(String ticketId, String staffIdentifier, com.caCommand.caCommand.dtos.AssignTicketRequest payload) {
         Ticket ticket = resolveTicket(ticketId);
         Staff staff = resolveStaff(staffIdentifier);
 
         requireStatus(ticket, TicketStatus.IN_PROGRESS);
 
+        String priority = payload != null && payload.priority() != null ? payload.priority() : "Normal";
+        String notes = payload != null && payload.notes() != null ? payload.notes() : "";
         String normalizedPriority = Priority.normalize(priority);
+        
         ticket.setAssignedStaff(staff);
         ticket.setStatus(TicketStatus.ASSIGNED_TO_STAFF.name());
         ticket.setPriority(normalizedPriority);
@@ -378,19 +381,20 @@ public class AdminTicketService {
         ));
 
         String aisPdfLink = ticket.getAisPdfPath() != null ? "\n📄 *AIS/TIS Report:* http://localhost:5001/api/admin/tickets/" + ticketId + "/download-pdf" : "";
+        
+        String deadline = payload != null && payload.deadline() != null ? payload.deadline() : "Not specified";
+        String language = payload != null && payload.language() != null ? payload.language() : "English/Hindi";
 
         whatsappMessageSender.sendMessage(staff.getPhoneNumber(), formatMessage(
-                "🔔 *NEW CLIENT ASSIGNMENT*",
-                "Aapko ek naya client assign hua hai. Kripya inhe jald se jald call karein aur inka kaam shuru karein.",
-                "",
-                "👤 *Client Details:*",
-                "Phone: +" + ticket.getClient().getPhoneNumber(),
+                "👨‍💼 *New Assignment: " + ticket.getCaseId() + "*",
+                "Client: " + nullToDefault(ticket.getClient().getName(), ticket.getClient().getPhoneNumber()),
                 "Service: " + ticket.getServiceType(),
-                "City: " + nullToDefault(ticket.getClient().getCity(), "Not provided"),
-                "Priority: " + normalizedPriority,
-                aisPdfLink,
                 "",
-                "📝 *Admin Notes:* " + nullToDefault(notes, "Process according to standard guidelines")
+                "Priority: " + (normalizedPriority.equalsIgnoreCase("HIGH") ? "🔴 " : "") + normalizedPriority,
+                "Deadline: " + deadline,
+                "Language: " + language,
+                "Notes: " + nullToDefault(notes, "No additional notes."),
+                aisPdfLink
         ));
 
         log.info("Assigned ticket id={} to staff id={} priority={}", ticketId, staffIdentifier, normalizedPriority);
@@ -660,11 +664,15 @@ public class AdminTicketService {
         ticket.setProgressPercent(100);
 
         Ticket finishedTicket = saveAndBroadcast(ticket);
+        String finalUrl = ticket.getStaffSubmittedDocument() != null ? s3StorageService.getSignedUrl(ticket.getStaffSubmittedDocument()) : "Contact support for final document link.";
         whatsappMessageSender.sendMessage(ticket.getClient().getPhoneNumber(), formatMessage(
                 "\uD83C\uDF89 Work completed and delivered!",
                 "Service: " + ticket.getServiceType(),
                 "Message: " + nullToDefault(closingMessage, "Your work has been completed as per requirements."),
-                "Final document: " + (ticket.getStaffSubmittedDocument() != null ? s3StorageService.getSignedUrl(ticket.getStaffSubmittedDocument()) : "Contact support for final document link.")
+                "",
+                "📄 *Download your final document here:*",
+                "Tap the link below to view or download:",
+                finalUrl
         ));
 
         if (ticket.getAssignedStaff() != null) {

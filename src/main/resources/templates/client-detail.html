@@ -28,38 +28,38 @@
                     </div>
                     <div class="p-4" th:if="${extractedData != null}">
                         <div class="row g-3">
-                            <div class="col-md-4">
-                                <div class="p-3 rounded bg-light border border-light">
+                            <div class="col-6 col-md-4">
+                                <div class="p-3 rounded bg-light border border-light h-100">
                                     <p class="text-uppercase text-muted small fw-bold mb-1">Salary Income</p>
                                     <h5 class="mb-0 fw-bold" th:text="'₹ ' + ${#numbers.formatDecimal(extractedData.salaryIncome != null ? extractedData.salaryIncome : 0, 0, 'COMMA', 0, 'POINT')}">₹ 0</h5>
                                 </div>
                             </div>
-                            <div class="col-md-4">
-                                <div class="p-3 rounded bg-light border border-light">
+                            <div class="col-6 col-md-4">
+                                <div class="p-3 rounded bg-light border border-light h-100">
                                     <p class="text-uppercase text-muted small fw-bold mb-1">Interest Income</p>
                                     <h5 class="mb-0 fw-bold" th:text="'₹ ' + ${#numbers.formatDecimal(extractedData.interestIncome != null ? extractedData.interestIncome : 0, 0, 'COMMA', 0, 'POINT')}">₹ 0</h5>
                                 </div>
                             </div>
-                            <div class="col-md-4">
-                                <div class="p-3 rounded bg-light border border-light">
+                            <div class="col-6 col-md-4">
+                                <div class="p-3 rounded bg-light border border-light h-100">
                                     <p class="text-uppercase text-muted small fw-bold mb-1">Dividend</p>
                                     <h5 class="mb-0 fw-bold" th:text="'₹ ' + ${#numbers.formatDecimal(extractedData.dividendIncome != null ? extractedData.dividendIncome : 0, 0, 'COMMA', 0, 'POINT')}">₹ 0</h5>
                                 </div>
                             </div>
-                            <div class="col-md-4">
-                                <div class="p-3 rounded" style="background: #fee2e2; border: 1px solid #fecaca;">
+                            <div class="col-6 col-md-4">
+                                <div class="p-3 rounded h-100" style="background: #fee2e2; border: 1px solid #fecaca;">
                                     <p class="text-uppercase small fw-bold mb-1" style="color: #dc2626;">TDS Deducted</p>
                                     <h5 class="mb-0 fw-bold text-danger" th:text="'₹ ' + ${#numbers.formatDecimal(extractedData.tds != null ? extractedData.tds : 0, 0, 'COMMA', 0, 'POINT')}">₹ 0</h5>
                                 </div>
                             </div>
-                            <div class="col-md-4">
-                                <div class="p-3 rounded" style="background: #dcfce7; border: 1px solid #bbf7d0;">
+                            <div class="col-6 col-md-4">
+                                <div class="p-3 rounded h-100" style="background: #dcfce7; border: 1px solid #bbf7d0;">
                                     <p class="text-uppercase small fw-bold mb-1" style="color: #16a34a;">Risk Score</p>
                                     <h5 class="mb-0 fw-bold text-success" th:text="${extractedData.riskScore != null ? extractedData.riskScore : 'Low'}">Low</h5>
                                 </div>
                             </div>
-                            <div class="col-md-4">
-                                <div class="p-3 rounded" style="background: #fef9c3; border: 1px solid #fef08a;">
+                            <div class="col-6 col-md-4">
+                                <div class="p-3 rounded h-100" style="background: #fef9c3; border: 1px solid #fef08a;">
                                     <p class="text-uppercase small fw-bold mb-1" style="color: #ca8a04;">Notices</p>
                                     <h5 class="mb-0 fw-bold text-warning" th:text="${extractedData.noticeType != null ? extractedData.noticeType : 'None'}">None</h5>
                                 </div>
