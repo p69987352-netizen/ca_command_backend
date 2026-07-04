@@ -21,11 +21,15 @@ public class WhatsAppSecurityUtils {
 
     private final String appSecret;
 
-    public WhatsAppSecurityUtils(@Value("${whatsapp.app-secret}") String appSecret) {
+    public WhatsAppSecurityUtils(@Value("${whatsapp.app-secret:}") String appSecret) {
         this.appSecret = appSecret;
     }
 
     public boolean isValidSignature(String payload, String signatureHeader) {
+        if (appSecret == null || appSecret.isBlank()) {
+            log.error("WhatsApp App Secret is not configured. Webhook signature validation failed.");
+            return false;
+        }
         if (payload == null || signatureHeader == null || !signatureHeader.startsWith(SIGNATURE_PREFIX)) {
             return false;
         }
