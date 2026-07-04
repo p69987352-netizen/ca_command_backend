@@ -44,12 +44,22 @@ public class WhatsAppMediaService {
             JsonNode rootNode = objectMapper.readTree(response.getBody());
             String downloadUrl = rootNode.path("url").asText();
 
+            String mimeType = rootNode.path("mime_type").asText("");
+            String ext = "";
+            if (mimeType.equals("application/pdf")) {
+                ext = ".pdf";
+            } else if (mimeType.equals("image/jpeg")) {
+                ext = ".jpg";
+            } else if (mimeType.equals("image/png")) {
+                ext = ".png";
+            }
+
             // 2. Download the actual binary file (bytes) from Meta
             ResponseEntity<byte[]> fileResponse = restTemplate.exchange(downloadUrl, HttpMethod.GET, entity, byte[].class);
             byte[] fileBytes = fileResponse.getBody();
 
             if (fileBytes != null) {
-                String fileName = phoneNumber + "_" + mediaId; // Unique name
+                String fileName = phoneNumber + "_" + mediaId + ext; // Unique name
                 String s3Url = S3StorageService.uploadMedia(fileBytes, fileName);
 
                 if (s3Url != null) {

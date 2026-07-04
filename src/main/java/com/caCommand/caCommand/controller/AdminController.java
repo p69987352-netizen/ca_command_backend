@@ -256,12 +256,11 @@ public class AdminController {
     @PostMapping("/staff")
     public ResponseEntity<Staff> addStaff(@Valid @RequestBody StaffRequest staffRequest) {
         Staff newStaff = staffService.addStaffMember(staffRequest.getName(), staffRequest.getPhoneNumber());
-        
-        // Use template message for staff welcome to bypass 24-hour window
+        // Using custom 'staff_welcome_new' template
         whatsappMessageSender.sendTemplateMessage(
                 newStaff.getPhoneNumber(),
-                "staff_welcome",
-                "en",
+                "staff_welcome_new",
+                "en_us",
                 java.util.List.of(newStaff.getName())
         );
         
@@ -277,6 +276,42 @@ public class AdminController {
     public ResponseEntity<String> removeStaff(@PathVariable String staffId) {
         adminTicketService.removeStaff(staffId);
         return ResponseEntity.ok("Staff removed successfully");
+    }
+
+    @GetMapping("/staff/{staffId}/performance")
+    public ResponseEntity<com.caCommand.caCommand.dtos.StaffPerformanceDTO> getStaffPerformance(@PathVariable String staffId) {
+        return ResponseEntity.ok(adminTicketService.getStaffPerformance(staffId));
+    }
+
+    @GetMapping("/staff/{staffId}/attendance")
+    public ResponseEntity<List<com.caCommand.caCommand.entities.Attendance>> getStaffAttendance(@PathVariable String staffId) {
+        return ResponseEntity.ok(adminTicketService.getStaffAttendance(staffId));
+    }
+
+    @GetMapping("/staff/{staffId}/tickets")
+    public ResponseEntity<List<Ticket>> getStaffTickets(@PathVariable String staffId) {
+        return ResponseEntity.ok(adminTicketService.getStaffTickets(staffId));
+    }
+
+    @GetMapping("/staff/attendance/today")
+    public ResponseEntity<List<com.caCommand.caCommand.entities.Attendance>> getTodayAttendance() {
+        return ResponseEntity.ok(adminTicketService.getTodayAttendance());
+    }
+
+    @GetMapping("/staff/attendance/date/{date}")
+    public ResponseEntity<List<com.caCommand.caCommand.entities.Attendance>> getAttendanceByDate(@PathVariable String date) {
+        return ResponseEntity.ok(adminTicketService.getAttendanceByDate(java.time.LocalDate.parse(date)));
+    }
+
+    @GetMapping("/staff/attendance/month/{year}/{month}")
+    public ResponseEntity<List<com.caCommand.caCommand.entities.Attendance>> getAttendanceByMonth(@PathVariable int year, @PathVariable int month) {
+        return ResponseEntity.ok(adminTicketService.getAttendanceByMonth(year, month));
+    }
+
+    @PostMapping("/staff/remind-attendance")
+    public ResponseEntity<String> sendManualAttendanceReminders() {
+        adminTicketService.sendManualAttendanceReminders();
+        return ResponseEntity.ok("Attendance reminders dispatched successfully.");
     }
 
     // ======================================================

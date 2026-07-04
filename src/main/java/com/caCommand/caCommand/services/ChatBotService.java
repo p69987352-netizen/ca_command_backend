@@ -65,11 +65,12 @@ public class ChatBotService {
     private final S3StorageService s3StorageService;
     private final PipelineOrchestrator pipelineOrchestrator;
     private final ApplicationEventPublisher eventPublisher;
+    private final com.caCommand.caCommand.repositories.AttendanceRepository attendanceRepository;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(5);
     private final Map<String, ScheduledFuture<?>> pendingMessages = new ConcurrentHashMap();
 
     @Autowired
-    public ChatBotService(ChatSessionRepository sessionRepository, ClientRepository clientRepository, TicketRepository ticketRepository, WhatsAppMessageSender whatsappMessageSender, WhatsAppMediaService whatsappMediaService, StaffRepository staffRepository, com.caCommand.caCommand.repositories.StaffSessionRepository staffSessionRepository, GeminiService geminiService, LocationService locationService, LegacyDocumentExtractionService documentExtractionService, SimpMessagingTemplate messagingTemplate, CustomDocumentRequestRepository customDocumentRequestRepository, S3StorageService s3StorageService, PipelineOrchestrator pipelineOrchestrator, ApplicationEventPublisher eventPublisher) {
+    public ChatBotService(ChatSessionRepository sessionRepository, ClientRepository clientRepository, TicketRepository ticketRepository, WhatsAppMessageSender whatsappMessageSender, WhatsAppMediaService whatsappMediaService, StaffRepository staffRepository, com.caCommand.caCommand.repositories.StaffSessionRepository staffSessionRepository, GeminiService geminiService, LocationService locationService, LegacyDocumentExtractionService documentExtractionService, SimpMessagingTemplate messagingTemplate, CustomDocumentRequestRepository customDocumentRequestRepository, S3StorageService s3StorageService, PipelineOrchestrator pipelineOrchestrator, ApplicationEventPublisher eventPublisher, com.caCommand.caCommand.repositories.AttendanceRepository attendanceRepository) {
         this.sessionRepository = sessionRepository;
         this.clientRepository = clientRepository;
         this.ticketRepository = ticketRepository;
@@ -85,6 +86,7 @@ public class ChatBotService {
         this.s3StorageService = s3StorageService;
         this.pipelineOrchestrator = pipelineOrchestrator;
         this.eventPublisher = eventPublisher;
+        this.attendanceRepository = attendanceRepository;
     }
 
     @PreDestroy
@@ -104,6 +106,7 @@ public class ChatBotService {
         return saved;
     }
 
+    @Transactional
     public void processUserMessage(String phoneNumber, String messageType, String messageContent) {
         Staff staff = this.staffRepository.findByPhoneNumber(phoneNumber).orElse(null);
         if (staff != null) {
@@ -142,8 +145,8 @@ public class ChatBotService {
     }
 
     private void handleNewClientFlow(Client client, ChatSession session, String messageType, String messageContent, String phoneNumber) {
-        if (!("text".equals(messageType) || session.getCurrentState() != null && session.getCurrentState() != ChatState.NEW)) {
-            this.sendWelcomeNew(phoneNumber, session);
+        if (!"text".equals(messageType)) {
+            this.send(phoneNumber, session, "Kripya pehle text message se apni details bhejein ya service select karein, documents uske baad bhejein.");
             return;
         }
         ChatState state = session.getCurrentState() == null ? ChatState.NEW : session.getCurrentState();
@@ -154,12 +157,15 @@ public class ChatBotService {
                     session.setClientName(client.getName());
                     session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
                     this.sessionRepository.save(session);
-                    this.send(phoneNumber, session, "Welcome back " + client.getName() + " \ud83d\udc4b\n\nHow can we assist you today?\n\n1\ufe0f\u20e3 ITR Filing\n2\ufe0f\u20e3 GST Services\n3\ufe0f\u20e3 Notice / Appeal\n4\ufe0f\u20e3 Tax Advisory");
+                    this.send(phoneNumber, session, "\ud83d\udcd6 " + getRandomGitaQuote() + "\n\nWelcome back " + client.getName() + " \ud83d\udc4b\nThis is ARJUN - the AI assistant to help you.\n\nHow can we assist you today?\n\n1\ufe0f\u20e3 ITR Filing\n2\ufe0f\u20e3 GST Services\n3\ufe0f\u20e3 Notice / Appeal\n4\ufe0f\u20e3 Tax Advisory");
                     break;
                 }
                 session.setCurrentState(ChatState.COLLECTING_NAME);
                 this.sessionRepository.save(session);
-                this.send(phoneNumber, session, "\u2728 Welcome to Porwal CA\n\nI'm Arjun and I'll help you with your tax and compliance requirements today.\n\nTo get started, may I know your full name?");
+                this.send(phoneNumber, session, "\u2728 Welcome to Porwal CA");
+                this.send(phoneNumber, session, "\ud83d\udcd6 " + getRandomGitaQuote() + "\n\nThis is ARJUN - the AI assistant to help you.");
+                this.send(phoneNumber, session, "I'll help you with your tax and compliance requirements today.");
+                this.send(phoneNumber, session, "To get started, may I know your full name?");
                 break;
             }
             case COLLECTING_NAME: {
@@ -253,7 +259,7 @@ public class ChatBotService {
                     session.setCurrentState(ChatState.FINISHED);
                     this.sessionRepository.save(session);
                     
-                    this.send(phoneNumber, session, "Thank you. Our tax expert will contact you shortly. Reference ID: " + ticket.getCaseId());
+                    this.send(phoneNumber, session, "Thank you. Our tax expert will contact you shortly. Reference ID: " + ticket.getCaseId() + "\n\n\uD83D\uDCD6 " + getRandomGitaQuote());
                     break;
                 }
                 Ticket ticket = this.createTicket(client, selectedService, session);
@@ -271,7 +277,7 @@ public class ChatBotService {
                 this.saveAndBroadcast(callTicket);
                 session.setCurrentState(ChatState.FINISHED);
                 this.sessionRepository.save(session);
-                this.send(phoneNumber, session, "\u2705 Your " + session.getExtractedService() + " Consultation Has Been Scheduled\n\nOne of our tax specialists will review your case and reach out shortly.\nReference ID: " + callTicket.getCaseId());
+                this.send(phoneNumber, session, "\u2705 Your " + session.getExtractedService() + " Consultation Has Been Scheduled\n\nOne of our tax specialists will review your case and reach out shortly.\nReference ID: " + callTicket.getCaseId() + "\n\n\uD83D\uDCD6 " + getRandomGitaQuote());
                 break;
             }
             default: {
@@ -279,7 +285,7 @@ public class ChatBotService {
                     session.setClientName(client.getName());
                     session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
                     this.sessionRepository.save(session);
-                    this.send(phoneNumber, session, "Welcome back " + client.getName() + " \ud83d\udc4b\n\nHow can we assist you today?\n\n1\ufe0f\u20e3 ITR Filing\n2\ufe0f\u20e3 GST Services\n3\ufe0f\u20e3 Notice / Appeal\n4\ufe0f\u20e3 Tax Advisory");
+                    this.send(phoneNumber, session, "Welcome back " + client.getName() + " \ud83d\udc4b\n\nThis is ARJUN - the AI assistant to help you\n\nHow can we assist you today?\n\n1\ufe0f\u20e3 ITR Filing\n2\ufe0f\u20e3 GST Services\n3\ufe0f\u20e3 Notice / Appeal\n4\ufe0f\u20e3 Tax Advisory\n\n\uD83D\uDCD6 " + getRandomGitaQuote());
                 } else {
                     this.sendWelcomeNew(phoneNumber, session);
                     session.setCurrentState(ChatState.NEW);
@@ -290,7 +296,10 @@ public class ChatBotService {
     }
 
     private void sendWelcomeNew(String phoneNumber, ChatSession session) {
-        this.send(phoneNumber, session, "\ud83d\udc4b Welcome to Porwal CA\n\nI'm Arjun and I'll help you with your tax and compliance requirements today.\n\nTo get started, may I know your full name?");
+        this.send(phoneNumber, session, "\ud83d\udc4b Welcome to Porwal CA");
+        this.send(phoneNumber, session, "\ud83d\udcd6 " + getRandomGitaQuote() + "\n\nThis is ARJUN - the AI assistant to help you.");
+        this.send(phoneNumber, session, "I'll help you with your tax and compliance requirements today.");
+        this.send(phoneNumber, session, "To get started, may I know your full name?");
     }
 
     private void handleActiveTicketFlow(Client client, ChatSession session, Ticket ticket, String messageType, String messageContent, String phoneNumber) {
@@ -379,7 +388,7 @@ public class ChatBotService {
         }
         if (TicketStatus.FINISHED.name().equals(status) || TicketStatus.COMPLETED.name().equals(status)) {
             this.resetSession(session);
-            this.send(phoneNumber, session, String.format("%s, aapka previous %s complete ho chuka hai! \ud83c\udf89\n\nNayi service ke liye batao \u2014 Phorwal CA Firm hamesha ready hai.\n", this.nullToDefault(client.getName(), ""), ticket.getServiceType()));
+            this.send(phoneNumber, session, String.format("%s, aapka previous %s complete ho chuka hai! \ud83c\udf89\n\nNayi service ke liye batao \u2014 Phorwal CA Firm hamesha ready hai.\n\n\uD83D\uDCD6 %s", this.nullToDefault(client.getName(), ""), ticket.getServiceType(), getRandomGitaQuote()));
             return;
         }
         this.sendDocumentChecklist(phoneNumber, session, ticket, false);
@@ -448,7 +457,7 @@ public class ChatBotService {
         String verifiedDoc = this.geminiService.canonicalizeDocumentName(result.documentType());
         String string = ticket.getId().toString().intern();
         synchronized (string) {
-            Ticket freshTicket = this.ticketRepository.findById(ticket.getId()).orElse(ticket);
+            Ticket freshTicket = this.ticketRepository.findByIdWithPessimisticLock(ticket.getId()).orElse(ticket);
             LinkedHashMap<Object, String> collectedDocs = new LinkedHashMap<Object, String>();
             if (freshTicket.getClientDocuments() != null && !freshTicket.getClientDocuments().isEmpty()) {
                 String[] lines;
@@ -475,7 +484,7 @@ public class ChatBotService {
             try {
                 Ticket latestTicket = this.ticketRepository.findById(ticket.getId()).orElse(ticket);
                 List<String> reqDocs = this.geminiService.getRequiredDocuments(latestTicket.getServiceType());
-                ArrayList<String> coll = new ArrayList<String>();
+                java.util.Set<String> coll = new java.util.LinkedHashSet<String>();
                 if (latestTicket.getClientDocuments() != null && !latestTicket.getClientDocuments().isEmpty()) {
                     for (String line : latestTicket.getClientDocuments().split("\n")) {
                         String[] parts = line.split(" :: ");
@@ -529,16 +538,22 @@ public class ChatBotService {
 
     private void sendWelcome(String phoneNumber, ChatSession session, Client client) {
         String name = client.getName();
+        String prefix = "\ud83d\ude4f Namaste" + (this.isBlank(name) ? "!" : " " + name + "!") + "\n" +
+                        "Phorwal CA Firm mein aapka swagat hai.\n" +
+                        "This is ARJUN - the AI assistant to help you\n\n";
+        String suffix = "\n\n\uD83D\uDCD6 " + getRandomGitaQuote();
+        
         if (!this.isBlank(name)) {
-            this.send(phoneNumber, session, String.format("\ud83d\ude4f Namaste %s!\nPhorwal CA Firm mein aapka swagat hai.\n\nKaunsi CA service chahiye?\n\n\u2022 ITR Filing\n\u2022 GST Registration / GST Return\n\u2022 Balance Sheet / Audit\n\u2022 Company Registration\n\u2022 PAN Card Application\n\u2022 TDS Return Filing\n", name));
+            this.send(phoneNumber, session, prefix + "Kaunsi CA service chahiye?\n\n\u2022 ITR Filing\n\u2022 GST Registration / GST Return\n\u2022 Balance Sheet / Audit\n\u2022 Company Registration\n\u2022 PAN Card Application\n\u2022 TDS Return Filing" + suffix);
         } else {
-            this.send(phoneNumber, session, "\ud83d\ude4f Namaste! Phorwal CA Firm mein aapka swagat hai.\n\nApna naam batao please \u2014 taaki main aapko personally guide kar sakoon.\n");
+            this.send(phoneNumber, session, prefix + "Apna naam batao please \u2014 taaki main aapko personally guide kar sakoon." + suffix);
         }
     }
 
     private void sendDocumentChecklist(String phoneNumber, ChatSession session, Ticket ticket, boolean newlyCreated) {
         String message = this.getDetailedDocumentTemplate(ticket);
         this.send(phoneNumber, session, message);
+        this.send(phoneNumber, session, "\u26a0\ufe0f *Please submit your documents one by one to avoid confusion.*");
     }
 
     private String getDetailedDocumentTemplate(Ticket ticket) {
@@ -603,12 +618,48 @@ public class ChatBotService {
         String input = messageContent.trim();
         String inputUpper = input.toUpperCase(Locale.ROOT);
         
+        java.time.LocalDate today = java.time.LocalDate.now();
+        com.caCommand.caCommand.entities.Attendance attendance = this.attendanceRepository.findByStaffAndAttendanceDate(staff, today).orElse(null);
+
         com.caCommand.caCommand.entities.StaffSession staffSession = this.staffSessionRepository.findByStaffId(staff.getId())
             .orElseGet(() -> {
                 com.caCommand.caCommand.entities.StaffSession s = new com.caCommand.caCommand.entities.StaffSession();
                 s.setStaffId(staff.getId());
                 return s;
             });
+
+        boolean hasActiveSession = staffSession.getActiveCaseId() != null 
+                && staffSession.getExpiresAt() != null 
+                && staffSession.getExpiresAt().isAfter(LocalDateTime.now());
+
+        // Attendance Logic - ONLY if not in an active case session
+        if (attendance == null && !hasActiveSession) {
+            if ("image".equals(messageType)) {
+                String savedFilePath = this.whatsappMediaService.downloadAndSaveMedia(messageContent, staff.getPhoneNumber());
+                if (savedFilePath != null) {
+                    com.caCommand.caCommand.entities.Attendance newAttendance = new com.caCommand.caCommand.entities.Attendance();
+                    newAttendance.setStaff(staff);
+                    newAttendance.setAttendanceDate(today);
+                    newAttendance.setStatus(com.caCommand.caCommand.enums.AttendanceStatus.PRESENT);
+                    newAttendance.setPhotoUrl(savedFilePath);
+                    this.attendanceRepository.save(newAttendance);
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Aapki aaj ki attendance MARK ho gayi hai (PRESENT). Have a great day at work! 🏢");
+                    return;
+                }
+            } else if ("text".equals(messageType) && inputUpper.startsWith("NO")) {
+                com.caCommand.caCommand.entities.Attendance newAttendance = new com.caCommand.caCommand.entities.Attendance();
+                newAttendance.setStaff(staff);
+                newAttendance.setAttendanceDate(today);
+                newAttendance.setStatus(com.caCommand.caCommand.enums.AttendanceStatus.ABSENT);
+                String reason = input.substring(2).trim();
+                if (!reason.isEmpty()) {
+                    newAttendance.setReason(reason);
+                }
+                this.attendanceRepository.save(newAttendance);
+                this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "❌ Aapki aaj ki attendance ABSENT mark kar di gayi hai. Admin has been informed.");
+                return;
+            }
+        }
 
         // Global Commands
         if (inputUpper.equals("LIST")) {
@@ -620,9 +671,11 @@ public class ChatBotService {
             StringBuilder sb = new StringBuilder("📋 *Pending Dashboard*\n\n");
             for (Ticket t : activeTickets) {
                 String clientName = t.getClient() != null ? this.nullToDefault(t.getClient().getName(), t.getClient().getPhoneNumber()) : "-";
-                sb.append(String.format("• %s | %s | %s\n", t.getCaseId() != null ? t.getCaseId() : "Pending", clientName, t.getServiceType()));
+                sb.append(String.format("🔹 *%s* | %s\n", t.getCaseId() != null ? t.getCaseId() : "Pending", t.getServiceType()));
+                sb.append(String.format("   Client: %s\n", clientName));
+                sb.append(String.format("   Docs: %s\n", this.requiredDocsText(t, false).replaceAll("\n", ", ")));
             }
-            sb.append("\nType *SELECT CASE-XXXX* to open a file.");
+            sb.append("\nType *SELECT CASE-XXXX* to open a file and chat with the client.");
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), sb.toString());
             return;
         }
@@ -640,6 +693,17 @@ public class ChatBotService {
             this.staffSessionRepository.save(staffSession);
             
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Selected " + caseId + "\n\n" + this.staffStatusMessage(ticket));
+            return;
+        }
+
+        // Generic Greetings
+        if (inputUpper.equals("HI") || inputUpper.equals("HELLO") || inputUpper.equals("HEY") || inputUpper.equals("START") || inputUpper.equals("HII")) {
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), 
+                "👋 Hello " + staff.getName() + "!\n\n" +
+                "Welcome to the CA Command Staff Portal.\n\n" +
+                "📌 Type *LIST* to view your assigned tasks.\n" +
+                "📌 Send a *photo* to mark your daily attendance.\n" +
+                "📌 Type *NO <reason>* (e.g., NO sick) if you are absent today.");
             return;
         }
 
@@ -708,8 +772,8 @@ public class ChatBotService {
             workingTicket.setStaffUpdate(this.appendLog(workingTicket.getStaffUpdate(), note));
             this.saveAndBroadcast(workingTicket);
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Internal note saved to timeline.");
-        } else if (inputUpper.equals("DONE")) {
-            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "To mark DONE, please upload the final PDF/Image directly here.");
+        } else if (inputUpper.startsWith("DONE") || inputUpper.startsWith("COMPLETE")) {
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "To mark DONE, please upload the final PDF/Image directly here in this chat.");
         } else if (inputUpper.equals("HELP")) {
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "🛠 *Commands:*\nLIST - Show pending\nSELECT CASE-XXXX - Open file\nINFO - Case details\nNEED [doc] - Request doc\nASK [query] - Ask client\nNOTE [msg] - Add internal note\nDONE - Upload final work");
         } else {
@@ -885,7 +949,13 @@ public class ChatBotService {
                 "📊 *Status*: %s\n" +
                 "⏳ *Progress*: %s%%\n\n" +
                 "📄 *Client Documents*:\n%s\n\n" +
-                "📝 *Admin Notes*:\n%s", 
+                "📝 *Admin Notes*:\n%s\n\n" +
+                "🛠 *QUICK COMMANDS*:\n" +
+                "• *NEED [doc]* (e.g., NEED PAN Card) to ask client\n" +
+                "• *ASK [query]* to ask client a question\n" +
+                "• *NOTE [msg]* to save an internal note\n" +
+                "• *DONE* when you want to upload final work\n" +
+                "• *LIST* to go back to your dashboard", 
                 clientName, 
                 ticket.getClient() != null ? ticket.getClient().getPhoneNumber() : "-", 
                 this.nullToDefault(ticket.getClient() != null ? ticket.getClient().getCity() : null, "N/A"), 
@@ -1016,5 +1086,14 @@ public class ChatBotService {
         boolean hasIdKeyword = lower.contains("id:") || lower.contains("user:") || lower.contains("login:") || lower.contains("username:") || lower.contains("userid:") || lower.contains("user id") || lower.contains("email:") || lower.contains("mobile:") || lower.contains("pan:") || lower.contains("id") && lower.contains("@");
         boolean hasPassKeyword = lower.contains("password:") || lower.contains("pass:") || lower.contains("pwd:") || lower.contains("passcode:") || lower.contains("password ") || lower.contains("pass ") || lower.contains("otp:");
         return hasIdKeyword && hasPassKeyword;
+    }
+    private String getRandomGitaQuote() {
+        String[] quotes = {
+            "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन।\n(You have the right to perform your prescribed duty, but you are not entitled to the fruits of action.) - Bhagavad Gita",
+            "क्रोधाद्भवति सम्मोहः सम्मोहात्स्मृतिविभ्रमः।\n(Anger leads to clouding of judgment, which results in bewilderment of the memory.) - Bhagavad Gita",
+            "यदा यदा हि धर्मस्य ग्लानिर्भवति भारत।\n(Whenever there is a decline in righteousness, O Arjuna, I manifest myself on earth.) - Bhagavad Gita",
+            "उद्धरेदात्मनात्मानं नात्मानमवसादयेत्।\n(Elevate yourself through the power of your mind, and not degrade yourself, for the mind can be the friend and also the enemy of the self.) - Bhagavad Gita"
+        };
+        return quotes[new java.util.Random().nextInt(quotes.length)];
     }
 }

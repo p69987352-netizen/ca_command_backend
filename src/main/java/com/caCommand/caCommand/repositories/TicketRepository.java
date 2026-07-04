@@ -15,11 +15,17 @@ import java.util.UUID;
 public interface TicketRepository extends JpaRepository<Ticket, UUID> {
     Optional<Ticket> findByCaseId(String caseId);
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM Ticket t WHERE t.id = :id")
+    Optional<Ticket> findByIdWithPessimisticLock(@Param("id") UUID id);
+
     List<Ticket> findByStatus(String status);
 
     List<Ticket> findByStatusAndUpdatedAtBefore(String status, LocalDateTime timeLimit);
 
     List<Ticket> findByAssignedStaffIdAndStatusIn(UUID staffId, List<String> statuses);
+
+    List<Ticket> findByAssignedStaffIdOrderByCreatedAtDesc(UUID staffId);
 
     Optional<Ticket> findFirstByClientIdAndStatusInOrderByCreatedAtDesc(UUID clientId, List<String> statuses);
 

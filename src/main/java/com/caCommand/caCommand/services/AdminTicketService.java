@@ -19,8 +19,13 @@ import com.caCommand.caCommand.repositories.StaffRepository;
 import com.caCommand.caCommand.repositories.TicketRepository;
 import com.caCommand.caCommand.repositories.PaymentHistoryRepository;
 import com.caCommand.caCommand.repositories.ClientHistoryRepository;
+import com.caCommand.caCommand.repositories.AttendanceRepository;
+import com.caCommand.caCommand.services.WhatsAppMediaService;
+import org.springframework.context.ApplicationEventPublisher;
 import com.caCommand.caCommand.entities.PaymentHistory;
 import com.caCommand.caCommand.entities.ClientHistory;
+import com.caCommand.caCommand.services.S3StorageService;
+import com.caCommand.caCommand.services.WhatsAppMessageSender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -51,6 +56,9 @@ public class AdminTicketService {
     private final ClientRepository clientRepository;
     private final PaymentHistoryRepository paymentHistoryRepository;
     private final ClientHistoryRepository clientHistoryRepository;
+    private final AttendanceRepository attendanceRepository;
+    private final WhatsAppMediaService whatsappMediaService;
+    private final ApplicationEventPublisher eventPublisher;
     private final org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
     private final S3StorageService s3StorageService;
 
@@ -65,6 +73,9 @@ public class AdminTicketService {
             ClientRepository clientRepository,
             PaymentHistoryRepository paymentHistoryRepository,
             ClientHistoryRepository clientHistoryRepository,
+            AttendanceRepository attendanceRepository,
+            WhatsAppMediaService whatsappMediaService,
+            ApplicationEventPublisher eventPublisher,
             org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate,
             S3StorageService s3StorageService
     ) {
@@ -75,6 +86,9 @@ public class AdminTicketService {
         this.clientRepository = clientRepository;
         this.paymentHistoryRepository = paymentHistoryRepository;
         this.clientHistoryRepository = clientHistoryRepository;
+        this.attendanceRepository = attendanceRepository;
+        this.whatsappMediaService = whatsappMediaService;
+        this.eventPublisher = eventPublisher;
         this.messagingTemplate = messagingTemplate;
         this.s3StorageService = s3StorageService;
     }
@@ -163,12 +177,82 @@ public class AdminTicketService {
     @Transactional
     public void removeStaff(String staffIdentifier) {
         Staff staff = resolveStaff(staffIdentifier);
-        staffRepository.deleteById(staff.getId());
-        log.info("Removed staff member id={}", staff.getId());
+        staff.setIsActive(false);
+        staffRepository.save(staff);
+        log.info("Soft deleted staff member id={}", staff.getId());
+    }
+
+    public com.caCommand.caCommand.dtos.StaffPerformanceDTO getStaffPerformance(String staffId) {
+        Staff staff = resolveStaff(staffId);
+        com.caCommand.caCommand.dtos.StaffPerformanceDTO dto = new com.caCommand.caCommand.dtos.StaffPerformanceDTO();
+        dto.setStaffId(staff.getId().toString());
+        dto.setStaffName(staff.getName());
+        
+        List<Ticket> staffTickets = ticketRepository.findAll().stream()
+                .filter(t -> t.getAssignedStaff() != null && t.getAssignedStaff().getId().equals(staff.getId()))
+                .toList();
+
+        long completed = staffTickets.stream().filter(t -> com.caCommand.caCommand.enums.TicketStatus.COMPLETED.name().equals(t.getStatus())).count();
+        long pending = staffTickets.stream().filter(t -> !com.caCommand.caCommand.enums.TicketStatus.COMPLETED.name().equals(t.getStatus())).count();
+        // Since reassigned is tricky to track without a specific history table, we'll keep it simple for now or derive from logs. Let's say 0.
+        long reassigned = 0; 
+        
+        dto.setTotalCompleted(completed);
+        dto.setTotalPending(pending);
+        dto.setTotalReassigned(reassigned);
+
+        java.time.LocalDate startOfMonth = java.time.LocalDate.now().withDayOfMonth(1);
+        java.time.LocalDate endOfMonth = java.time.LocalDate.now().withDayOfMonth(java.time.LocalDate.now().lengthOfMonth());
+        
+        List<com.caCommand.caCommand.entities.Attendance> monthAttendance = attendanceRepository.findByStaffAndAttendanceDateBetweenOrderByAttendanceDateDesc(staff, startOfMonth, endOfMonth);
+        
+        long daysPresent = monthAttendance.stream().filter(a -> com.caCommand.caCommand.enums.AttendanceStatus.PRESENT.equals(a.getStatus())).count();
+        long daysAbsent = monthAttendance.stream().filter(a -> com.caCommand.caCommand.enums.AttendanceStatus.ABSENT.equals(a.getStatus())).count();
+        
+        dto.setDaysPresent(daysPresent);
+        dto.setDaysAbsent(daysAbsent);
+        
+        return dto;
+    }
+
+    public List<com.caCommand.caCommand.entities.Attendance> getStaffAttendance(String staffId) {
+        Staff staff = resolveStaff(staffId);
+        return attendanceRepository.findByStaffOrderByAttendanceDateDesc(staff);
+    }
+
+    public List<Ticket> getStaffTickets(String staffId) {
+        Staff staff = resolveStaff(staffId);
+        return ticketRepository.findByAssignedStaffIdOrderByCreatedAtDesc(staff.getId());
+    }
+
+    public List<com.caCommand.caCommand.entities.Attendance> getTodayAttendance() {
+        return attendanceRepository.findByAttendanceDate(java.time.LocalDate.now());
+    }
+
+    public List<com.caCommand.caCommand.entities.Attendance> getAttendanceByDate(java.time.LocalDate date) {
+        return attendanceRepository.findByAttendanceDate(date);
+    }
+
+    public List<com.caCommand.caCommand.entities.Attendance> getAttendanceByMonth(int year, int month) {
+        java.time.LocalDate startOfMonth = java.time.LocalDate.of(year, month, 1);
+        java.time.LocalDate endOfMonth = startOfMonth.withDayOfMonth(startOfMonth.lengthOfMonth());
+        return attendanceRepository.findByAttendanceDateBetweenOrderByAttendanceDateDesc(startOfMonth, endOfMonth);
     }
 
     public List<Ticket> getAllTickets() {
         return ticketRepository.findAll();
+    }
+
+    public void sendManualAttendanceReminders() {
+        List<Staff> activeStaff = staffRepository.findAll().stream().filter(Staff::getIsActive).toList();
+        java.time.LocalDate today = java.time.LocalDate.now();
+        for (Staff staff : activeStaff) {
+            boolean marked = attendanceRepository.findByStaffAndAttendanceDate(staff, today).isPresent();
+            if (!marked) {
+                whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "🔔 *Attendance Reminder*\nPlease submit your attendance photo, or reply *NO <reason>* if you are absent today (e.g., NO feeling sick).");
+                log.info("Sent manual attendance reminder to {}", staff.getPhoneNumber());
+            }
+        }
     }
 
     public List<Ticket> getPendingTickets() {
