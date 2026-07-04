@@ -217,7 +217,7 @@ public class AdminTicketService {
 
     public List<com.caCommand.caCommand.entities.Attendance> getStaffAttendance(String staffId) {
         Staff staff = resolveStaff(staffId);
-        return attendanceRepository.findByStaffOrderByAttendanceDateDesc(staff);
+        return signAttendanceUrls(attendanceRepository.findByStaffOrderByAttendanceDateDesc(staff));
     }
 
     public List<Ticket> getStaffTickets(String staffId) {
@@ -226,17 +226,27 @@ public class AdminTicketService {
     }
 
     public List<com.caCommand.caCommand.entities.Attendance> getTodayAttendance() {
-        return attendanceRepository.findByAttendanceDate(java.time.LocalDate.now());
+        return signAttendanceUrls(attendanceRepository.findByAttendanceDate(java.time.LocalDate.now()));
     }
 
     public List<com.caCommand.caCommand.entities.Attendance> getAttendanceByDate(java.time.LocalDate date) {
-        return attendanceRepository.findByAttendanceDate(date);
+        return signAttendanceUrls(attendanceRepository.findByAttendanceDate(date));
     }
 
     public List<com.caCommand.caCommand.entities.Attendance> getAttendanceByMonth(int year, int month) {
         java.time.LocalDate startOfMonth = java.time.LocalDate.of(year, month, 1);
         java.time.LocalDate endOfMonth = startOfMonth.withDayOfMonth(startOfMonth.lengthOfMonth());
-        return attendanceRepository.findByAttendanceDateBetweenOrderByAttendanceDateDesc(startOfMonth, endOfMonth);
+        return signAttendanceUrls(attendanceRepository.findByAttendanceDateBetweenOrderByAttendanceDateDesc(startOfMonth, endOfMonth));
+    }
+
+    private List<com.caCommand.caCommand.entities.Attendance> signAttendanceUrls(List<com.caCommand.caCommand.entities.Attendance> list) {
+        if (list == null) return null;
+        for (com.caCommand.caCommand.entities.Attendance attendance : list) {
+            if (attendance.getPhotoUrl() != null && !attendance.getPhotoUrl().isBlank()) {
+                attendance.setPhotoUrl(s3StorageService.getSignedUrl(attendance.getPhotoUrl()));
+            }
+        }
+        return list;
     }
 
     public List<Ticket> getAllTickets() {
