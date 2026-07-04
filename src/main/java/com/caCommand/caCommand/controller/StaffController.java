@@ -67,4 +67,11 @@ public class StaffController {
 
         return ResponseEntity.ok(adminTicketService.staffUpdateProgress(ticketId, request));
     }
+
+    @PostMapping("/tickets/{ticketId}/call-done")
+    public ResponseEntity<Ticket> markCallDone(
+            @PathVariable String ticketId,
+            @RequestBody(required = false) String notes) {
+        return ResponseEntity.ok(adminTicketService.markCallDone(ticketId, notes));
+    }
 }

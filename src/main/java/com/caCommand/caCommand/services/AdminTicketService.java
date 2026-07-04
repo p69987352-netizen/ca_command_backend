@@ -454,14 +454,18 @@ public class AdminTicketService {
         Ticket ticket = resolveTicket(ticketId);
         Staff staff = resolveStaff(staffIdentifier);
 
-        requireStatus(ticket, TicketStatus.IN_PROGRESS);
+        if (!TicketStatus.IN_PROGRESS.name().equals(ticket.getStatus()) && !TicketStatus.CALL_PENDING.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException("Ticket must be IN_PROGRESS or CALL_PENDING. Current status: " + ticket.getStatus());
+        }
 
         String priority = payload != null && payload.priority() != null ? payload.priority() : "Normal";
         String notes = payload != null && payload.notes() != null ? payload.notes() : "";
         String normalizedPriority = Priority.normalize(priority);
         
         ticket.setAssignedStaff(staff);
-        ticket.setStatus(TicketStatus.ASSIGNED_TO_STAFF.name());
+        if (!TicketStatus.CALL_PENDING.name().equals(ticket.getStatus())) {
+            ticket.setStatus(TicketStatus.ASSIGNED_TO_STAFF.name());
+        }
         ticket.setPriority(normalizedPriority);
         ticket.setAdminNotes(notes);
         ticket.setProgressPercent(10);
@@ -849,7 +853,8 @@ public class AdminTicketService {
             throw new InvalidTicketStateException("Ticket has no assigned staff member");
         }
         if (!TicketStatus.ASSIGNED_TO_STAFF.name().equals(ticket.getStatus())
-                && !TicketStatus.PENDING_ADMIN_QC.name().equals(ticket.getStatus())) {
+                && !TicketStatus.PENDING_ADMIN_QC.name().equals(ticket.getStatus())
+                && !TicketStatus.CALL_PENDING.name().equals(ticket.getStatus())) {
             throw new InvalidTicketStateException("Ticket is not in staff workflow. Current status: " + ticket.getStatus());
         }
     }

@@ -49,7 +49,7 @@ public class ChatBotService {
     private static final Logger log = LoggerFactory.getLogger(ChatBotService.class);
     private static final String TEST_SERVICE = "ITR Filing";
     private static final List<String> ACTIVE_TICKET_STATUSES = List.of(TicketStatus.PENDING_ADMIN_APPROVAL.name(), TicketStatus.AWAITING_PAYMENT.name(), TicketStatus.PAYMENT_RECEIVED.name(), TicketStatus.PAYMENT_VERIFICATION_PENDING.name(), TicketStatus.IN_PROGRESS.name(), TicketStatus.ASSIGNED_TO_STAFF.name(), TicketStatus.PENDING_ADMIN_QC.name(), TicketStatus.CALL_PENDING.name(), TicketStatus.NORMAL_FLOW.name(), TicketStatus.WAITING_FOR_CLIENT_DOCUMENT.name(), TicketStatus.WAITING_FOR_ADMIN.name(), TicketStatus.UNDER_REVIEW.name(), "VALIDATING", "OCR_RUNNING", "CLASSIFYING", "EXTRACTING", "AI_ANALYSIS", "COMPLETED", "FAILED");
-    private static final List<String> STAFF_ACTIVE_STATUSES = List.of(TicketStatus.ASSIGNED_TO_STAFF.name(), TicketStatus.PENDING_ADMIN_QC.name());
+    private static final List<String> STAFF_ACTIVE_STATUSES = List.of(TicketStatus.ASSIGNED_TO_STAFF.name(), TicketStatus.PENDING_ADMIN_QC.name(), TicketStatus.CALL_PENDING.name());
     private final ChatSessionRepository sessionRepository;
     private final ClientRepository clientRepository;
     private final TicketRepository ticketRepository;
@@ -773,7 +773,22 @@ public class ChatBotService {
             this.saveAndBroadcast(workingTicket);
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Internal note saved to timeline.");
         } else if (inputUpper.startsWith("DONE") || inputUpper.startsWith("COMPLETE")) {
-            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "To mark DONE, please upload the final PDF/Image directly here in this chat.");
+            if (TicketStatus.CALL_PENDING.name().equals(workingTicket.getStatus())) {
+                String notes = input.toUpperCase().startsWith("DONE") ? 
+                        (input.length() > 4 ? input.substring(4).trim() : "Call completed.") :
+                        (input.length() > 8 ? input.substring(8).trim() : "Call completed.");
+                workingTicket.setStatus(TicketStatus.CALL_DONE.name());
+                workingTicket.setCallNotes(notes);
+                workingTicket.setCallCompletedAt(LocalDateTime.now());
+                workingTicket.setCompletedAt(LocalDateTime.now());
+                workingTicket.setProgressPercent(100);
+                this.saveAndBroadcast(workingTicket);
+                this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Call marked as DONE & case completed for " + workingTicket.getCaseId());
+                staffSession.setActiveCaseId(null);
+                this.staffSessionRepository.save(staffSession);
+            } else {
+                this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "To mark DONE, please upload the final PDF/Image directly here in this chat.");
+            }
         } else if (inputUpper.equals("HELP")) {
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "🛠 *Commands:*\nLIST - Show pending\nSELECT CASE-XXXX - Open file\nINFO - Case details\nNEED [doc] - Request doc\nASK [query] - Ask client\nNOTE [msg] - Add internal note\nDONE - Upload final work");
         } else {
