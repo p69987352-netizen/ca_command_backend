@@ -30,14 +30,24 @@ public class S3StorageService implements StorageService {
     private final String endpointUrl;
     private final String region;
 
-    public S3StorageService(@Value("${aws.s3.bucket}") String bucketName,
-                            @Value("${aws.s3.access-key}") String accessKey,
-                            @Value("${aws.s3.secret-key}") String secretKey,
-                            @Value("${aws.s3.region}") String region,
+    public S3StorageService(@Value("${aws.s3.bucket:}") String bucketName,
+                            @Value("${aws.s3.access-key:}") String accessKey,
+                            @Value("${aws.s3.secret-key:}") String secretKey,
+                            @Value("${aws.s3.region:}") String region,
                             @Value("${aws.s3.endpoint:}") String endpointUrl) {
         this.bucketName = bucketName;
         this.endpointUrl = endpointUrl;
         this.region = region;
+
+        if (bucketName == null || bucketName.isBlank() ||
+            accessKey == null || accessKey.isBlank() ||
+            secretKey == null || secretKey.isBlank() ||
+            region == null || region.isBlank()) {
+            log.warn("AWS S3 credentials or configuration are not provided. S3 features will be disabled.");
+            this.s3Client = null;
+            this.s3Presigner = null;
+            return;
+        }
 
         AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKey, secretKey);
         S3ClientBuilder builder = S3Client.builder()
@@ -60,6 +70,10 @@ public class S3StorageService implements StorageService {
     }
 
     public String uploadMedia(byte[] fileBytes, String fileName) {
+        if (s3Client == null) {
+            log.error("S3 client is not initialized. Cannot upload file={}", fileName);
+            return null;
+        }
         try {
             boolean isPdf = fileBytes.length > 4 && 
                             fileBytes[0] == 0x25 && // %
@@ -99,6 +113,10 @@ public class S3StorageService implements StorageService {
     }
 
     public String getSignedUrl(String urlStr) {
+        if (s3Presigner == null) {
+            log.warn("S3 presigner is not initialized. Returning raw URL={}", urlStr);
+            return urlStr;
+        }
         try {
             // Check if it's an S3 URL
             if (!urlStr.startsWith("s3://")) {
@@ -126,6 +144,9 @@ public class S3StorageService implements StorageService {
     }
     @Override
     public File downloadMediaLocally(String urlStr) throws Exception {
+        if (s3Client == null) {
+            throw new IllegalStateException("S3 client is not initialized. S3 storage features are disabled.");
+        }
         if (!urlStr.startsWith("s3://")) {
             throw new IllegalArgumentException("Not an S3 URL: " + urlStr);
         }
