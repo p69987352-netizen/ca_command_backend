@@ -65,6 +65,9 @@ public class AdminTicketService {
     @org.springframework.beans.factory.annotation.Value("${payment.qr.url:}")
     private String paymentQrUrl;
 
+    @org.springframework.beans.factory.annotation.Value("${app.base-url:http://localhost:5001}")
+    private String baseUrl;
+
     public AdminTicketService(
             TicketRepository ticketRepository,
             StaffRepository staffRepository,
@@ -478,7 +481,7 @@ public class AdminTicketService {
                 "Assigned staff: " + staff.getName()
         ));
 
-        String aisPdfLink = ticket.getAisPdfPath() != null ? "\n📄 *AIS/TIS Report:* http://localhost:5001/api/admin/tickets/" + ticketId + "/download-pdf" : "";
+        String aisPdfLink = ticket.getAisPdfPath() != null ? "\n📄 *AIS/TIS Report:* " + baseUrl + "/api/admin/tickets/" + ticketId + "/download-pdf" : "";
         
         String deadline = payload != null && payload.deadline() != null ? payload.deadline() : "Not specified";
         String language = payload != null && payload.language() != null ? payload.language() : "English/Hindi";
