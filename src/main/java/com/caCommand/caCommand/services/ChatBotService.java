@@ -149,21 +149,36 @@ public class ChatBotService {
             this.send(phoneNumber, session, "Kripya pehle text message se apni details bhejein ya service select karein, documents uske baad bhejein.");
             return;
         }
-        ChatState state = session.getCurrentState() == null ? ChatState.NEW : session.getCurrentState();
         String content = messageContent.trim();
+        String contentUpper = content.toUpperCase(Locale.ROOT);
+        
+        // Reset state to NEW if they say Hi/Hello/Start and have no active ticket
+        if (java.util.Set.of("HI", "HELLO", "HII", "HEY", "START", "RESET").contains(contentUpper)) {
+            session.setCurrentState(ChatState.NEW);
+            this.sessionRepository.save(session);
+        }
+
+        ChatState state = session.getCurrentState() == null ? ChatState.NEW : session.getCurrentState();
         switch (state) {
             case NEW: {
                 if (client.getName() != null && !client.getName().isBlank()) {
                     session.setClientName(client.getName());
                     session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
                     this.sessionRepository.save(session);
-                    this.send(phoneNumber, session, "\ud83d\udcd6 " + getRandomGitaQuote() + "\n\nWelcome back " + client.getName() + " \ud83d\udc4b\nThis is ARJUN - the AI assistant to help you.\n\nHow can we assist you today?\n\n1\ufe0f\u20e3 ITR Filing\n2\ufe0f\u20e3 GST Services\n3\ufe0f\u20e3 Notice / Appeal\n4\ufe0f\u20e3 Tax Advisory");
+                    this.send(phoneNumber, session, "✨ *Welcome to LegalFactory*\n\n" +
+                            "👋 Welcome back, " + client.getName() + "!\n\n" +
+                            "📖 *" + getRandomGitaQuote() + "*\n\n" +
+                            "Please select the service which you want to use:\n\n" +
+                            "1️⃣ ITR Filing\n" +
+                            "2️⃣ GST Services\n" +
+                            "3️⃣ Notice / Appeal\n" +
+                            "4️⃣ Tax Advisory");
                     break;
                 }
                 session.setCurrentState(ChatState.COLLECTING_NAME);
                 this.sessionRepository.save(session);
-                this.send(phoneNumber, session, "\u2728 Welcome to Porwal CA");
-                this.send(phoneNumber, session, "\ud83d\udcd6 " + getRandomGitaQuote() + "\n\nThis is ARJUN - the AI assistant to help you.");
+                this.send(phoneNumber, session, "✨ *Welcome to LegalFactory*");
+                this.send(phoneNumber, session, "📖 *" + getRandomGitaQuote() + "*\n\nThis is ARJUN - the AI assistant to help you.");
                 this.send(phoneNumber, session, "I'll help you with your tax and compliance requirements today.");
                 this.send(phoneNumber, session, "To get started, may I know your full name?");
                 break;

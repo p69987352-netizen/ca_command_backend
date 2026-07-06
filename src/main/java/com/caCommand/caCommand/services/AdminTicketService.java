@@ -346,7 +346,11 @@ public class AdminTicketService {
     @Transactional
     public Ticket approveTicketAndSetFee(String ticketId, AdminApprovalRequest request) {
         Ticket ticket = resolveTicket(ticketId);
-        requireStatus(ticket, TicketStatus.PENDING_ADMIN_APPROVAL);
+        if (!TicketStatus.PENDING_ADMIN_APPROVAL.name().equals(ticket.getStatus()) 
+                && !TicketStatus.CALL_PENDING.name().equals(ticket.getStatus())) {
+            throw new InvalidTicketStateException(
+                    "Ticket must be PENDING_ADMIN_APPROVAL or CALL_PENDING. Current status: " + ticket.getStatus());
+        }
 
         ticket.setStatus(TicketStatus.AWAITING_PAYMENT.name());
         ticket.setQuotedFee(request.getFeeAmount());
