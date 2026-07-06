@@ -29,7 +29,13 @@ public class PricingController {
             return ResponseEntity.notFound().build();
         }
         
-        Optional<ExtractedData> dataOpt = extractedDataRepository.findFirstByClientIdOrderByCreatedAtDesc(ticketOpt.get().getClient().getId());
+        com.caCommand.caCommand.entities.Ticket ticket = ticketOpt.get();
+        String serviceType = ticket.getServiceType() != null ? ticket.getServiceType().toLowerCase() : "";
+        if (!serviceType.contains("itr")) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        Optional<ExtractedData> dataOpt = extractedDataRepository.findFirstByClientIdOrderByCreatedAtDesc(ticket.getClient().getId());
         if (dataOpt.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
