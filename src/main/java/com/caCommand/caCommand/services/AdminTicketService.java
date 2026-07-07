@@ -258,11 +258,15 @@ public class AdminTicketService {
 
     public void sendManualAttendanceReminders() {
         List<Staff> activeStaff = staffRepository.findAll().stream().filter(Staff::getIsActive).toList();
-        java.time.LocalDate today = java.time.LocalDate.now();
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
         for (Staff staff : activeStaff) {
-            boolean marked = attendanceRepository.findByStaffAndAttendanceDate(staff, today).isPresent();
+            java.util.Optional<com.caCommand.caCommand.entities.Attendance> attOpt = attendanceRepository.findByStaffAndAttendanceDate(staff, today);
+            boolean marked = attOpt.isPresent() && attOpt.get().getStatus() != com.caCommand.caCommand.enums.AttendanceStatus.NOT_MARKED;
             if (!marked) {
-                whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "🔔 *Attendance Reminder*\nPlease submit your attendance photo, or reply *NO <reason>* if you are absent today (e.g., NO feeling sick).");
+                String message = String.format("🚩 *Jay Shree Ram everyone* 🚩\n\n" +
+                        "Hello %s, kripa krke apni attendance bhejein aur photo send karein. If not present, please reply with reason (e.g. *NO <reason>*). 🙏📸", 
+                        staff.getName());
+                whatsappMessageSender.sendMessage(staff.getPhoneNumber(), message);
                 log.info("Sent manual attendance reminder to {}", staff.getPhoneNumber());
             }
         }
