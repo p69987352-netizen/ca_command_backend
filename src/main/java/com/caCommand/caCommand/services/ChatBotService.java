@@ -108,13 +108,25 @@ public class ChatBotService {
 
     @Transactional
     public void processUserMessage(String phoneNumber, String messageType, String messageContent) {
-        Staff staff = this.staffRepository.findByPhoneNumber(phoneNumber).orElse(null);
+        String cleanPhone = phoneNumber.replaceAll("[^0-9]", "");
+        if (cleanPhone.startsWith("91") && cleanPhone.length() > 10) {
+            cleanPhone = cleanPhone.substring(2);
+        }
+        final String searchPhone = cleanPhone;
+
+        Staff staff = this.staffRepository.findByPhoneNumber(phoneNumber)
+                .or(() -> this.staffRepository.findByPhoneNumber(searchPhone))
+                .orElse(null);
         if (staff != null) {
             this.handleStaffWorkflow(staff, messageType, messageContent);
             return;
         }
+
+        Client client = this.clientRepository.findByPhoneNumber(phoneNumber)
+                .or(() -> this.clientRepository.findByPhoneNumber(searchPhone))
+                .orElseGet(() -> this.createClient(phoneNumber));
+
         if ("text".equals(messageType) && "hello testing".equalsIgnoreCase(messageContent.trim())) {
-            Client client = this.clientRepository.findByPhoneNumber(phoneNumber).orElseGet(() -> this.createClient(phoneNumber));
             client.setName("Ajmer");
             client.setCity("Ajmer");
             client.setDob("21091976");
@@ -134,7 +146,7 @@ public class ChatBotService {
             this.send(phoneNumber, session, "\ud83e\uddea *Testing Mode Activated*\n\nWelcome Bhanu (Ajmer).\nAll details auto-filled!\n\nPlease select your service:\n\n1\ufe0f\u20e3 ITR Filing\n2\ufe0f\u20e3 GST Services\n3\ufe0f\u20e3 Notice / Appeal\n4\ufe0f\u20e3 Tax Advisory");
             return;
         }
-        Client client = this.clientRepository.findByPhoneNumber(phoneNumber).orElseGet(() -> this.createClient(phoneNumber));
+
         ChatSession session = this.getOrCreateSession(phoneNumber);
         Ticket activeTicket = this.findActiveTicket(client);
         if (activeTicket != null) {
