@@ -457,7 +457,7 @@ public class AdminController {
                             if (clientDocs.length() > 0) {
                                 clientDocs.append("\n");
                             }
-                            clientDocs.append(docName).append(" :: ").append(s3Key);
+                            clientDocs.append(docName).append(" :: ").append(s3Url);
                         }
                     } catch (java.io.IOException e) {
                         e.printStackTrace();

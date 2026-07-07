@@ -165,7 +165,8 @@ public class ChatBotService {
                     session.setClientName(client.getName());
                     session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
                     this.sessionRepository.save(session);
-                    this.send(phoneNumber, session, "✨ *Welcome to LegalFactory*\n\n" +
+                    this.send(phoneNumber, session, "🚩 *Jay Shree Ram* 🚩\n\n" +
+                            "✨ *Welcome to LegalFactory*\n\n" +
                             "👋 Welcome back, " + client.getName() + "!\n\n" +
                             "📖 *" + getRandomGitaQuote() + "*\n\n" +
                             "Please select the service which you want to use:\n\n" +
@@ -177,7 +178,7 @@ public class ChatBotService {
                 }
                 session.setCurrentState(ChatState.COLLECTING_NAME);
                 this.sessionRepository.save(session);
-                this.send(phoneNumber, session, "✨ *Welcome to LegalFactory*");
+                this.send(phoneNumber, session, "🚩 *Jay Shree Ram* 🚩\n\n✨ *Welcome to LegalFactory*");
                 this.send(phoneNumber, session, "📖 *" + getRandomGitaQuote() + "*\n\nThis is ARJUN - the AI assistant to help you.");
                 this.send(phoneNumber, session, "I'll help you with your tax and compliance requirements today.");
                 this.send(phoneNumber, session, "To get started, may I know your full name?");
@@ -714,11 +715,12 @@ public class ChatBotService {
         // Generic Greetings
         if (inputUpper.equals("HI") || inputUpper.equals("HELLO") || inputUpper.equals("HEY") || inputUpper.equals("START") || inputUpper.equals("HII")) {
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), 
-                "👋 Hello " + staff.getName() + "!\n\n" +
-                "Welcome to the CA Command Staff Portal.\n\n" +
+                "🚩 *Jay Shree Ram* 🚩\n\n" +
+                "Welcome to the CA Command Center / Staff Portal.\n\n" +
+                "Hello " + staff.getName() + ", kripa apni attendance bhejein aur photo send karein. If not present, please reply with reason (e.g., *NO <reason>*).\n\n" +
                 "📌 Type *LIST* to view your assigned tasks.\n" +
                 "📌 Send a *photo* to mark your daily attendance.\n" +
-                "📌 Type *NO <reason>* (e.g., NO sick) if you are absent today.");
+                "📌 Type *NO <reason>* if you are absent today.");
             return;
         }
 

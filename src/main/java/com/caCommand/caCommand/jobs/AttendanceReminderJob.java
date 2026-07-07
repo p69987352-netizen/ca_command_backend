@@ -1,6 +1,9 @@
 package com.caCommand.caCommand.jobs;
 
 import com.caCommand.caCommand.entities.Staff;
+import com.caCommand.caCommand.entities.Attendance;
+import com.caCommand.caCommand.enums.AttendanceStatus;
+import com.caCommand.caCommand.repositories.AttendanceRepository;
 import com.caCommand.caCommand.services.StaffService;
 import com.caCommand.caCommand.services.WhatsAppMessageSender;
 import org.slf4j.Logger;
@@ -8,7 +11,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
+import java.util.Optional;
 
 @Component
 public class AttendanceReminderJob {
@@ -17,13 +23,19 @@ public class AttendanceReminderJob {
 
     private final StaffService staffService;
     private final WhatsAppMessageSender whatsappMessageSender;
+    private final AttendanceRepository attendanceRepository;
 
-    public AttendanceReminderJob(StaffService staffService, WhatsAppMessageSender whatsappMessageSender) {
+    public AttendanceReminderJob(
+            StaffService staffService, 
+            WhatsAppMessageSender whatsappMessageSender,
+            AttendanceRepository attendanceRepository
+    ) {
         this.staffService = staffService;
         this.whatsappMessageSender = whatsappMessageSender;
+        this.attendanceRepository = attendanceRepository;
     }
 
-    // Run every day at 10:00 AM. Assuming server is in IST time zone.
+    // Run Monday to Saturday at 10:30 AM.
     // Cron expression: seconds minutes hours day-of-month month day-of-week
     @Scheduled(cron = "0 30 10 * * MON-SAT", zone = "Asia/Kolkata")
     public void sendAttendanceReminders() {
@@ -32,10 +44,19 @@ public class AttendanceReminderJob {
                 .filter(Staff::getIsActive)
                 .toList();
 
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+
         for (Staff staff : activeStaff) {
-            String message = String.format("Hello %s, 👋\n\n" +
-                    "Please upload your photo to mark today's attendance. 📸\n\n" +
-                    "If you are not coming to the office today, simply reply with *NO* so that we can inform the Admin. 🛑", 
+            Optional<Attendance> attOpt = attendanceRepository.findByStaffAndAttendanceDate(staff, today);
+            boolean marked = attOpt.isPresent() && attOpt.get().getStatus() != AttendanceStatus.NOT_MARKED;
+            
+            if (marked) {
+                log.info("Skipping attendance reminder for staff {} as attendance is already marked today.", staff.getName());
+                continue;
+            }
+
+            String message = String.format("🚩 *Jay Shree Ram everyone* 🚩\n\n" +
+                    "Hello %s, kripa krke apni attendance bhejein aur photo send karein. If not present, please reply with reason (e.g. *NO <reason>*). 🙏📸", 
                     staff.getName());
 
             try {
