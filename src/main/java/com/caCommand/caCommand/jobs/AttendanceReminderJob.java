@@ -56,8 +56,11 @@ public class AttendanceReminderJob {
             }
 
             String message = String.format("🚩 *Jay Shree Ram everyone* 🚩\n\n" +
-                    "Hello %s, kripa krke apni attendance bhejein aur photo send karein. If not present, please reply with reason (e.g. *NO <reason>*). 🙏📸", 
-                    staff.getName());
+                    "Good Morning %s, 👋\n\n" +
+                    "📖 *%s*\n\n" +
+                    "Please upload your photo to mark today's attendance. 📸\n\n" +
+                    "If you are not coming to the office today, simply reply with *NO* so that we can inform the Admin. 🛑", 
+                    staff.getName(), getRandomGitaQuote());
 
             try {
                 whatsappMessageSender.sendMessage(staff.getPhoneNumber(), message);
@@ -67,5 +70,15 @@ public class AttendanceReminderJob {
             }
         }
         log.info("Finished Daily Attendance Reminder Job.");
+    }
+
+    private String getRandomGitaQuote() {
+        String[] quotes = {
+            "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन।\n(You have the right to perform your prescribed duty, but you are not entitled to the fruits of action.) - Bhagavad Gita",
+            "क्रोधाद्भवति सम्मोहः सम्मोहात्स्मृतिविभ्रमः।\n(Anger leads to clouding of judgment, which results in bewilderment of the memory.) - Bhagavad Gita",
+            "यदा यदा हि धर्मस्य ग्लानिर्भवति भारत।\n(Whenever there is a decline in righteousness, O Arjuna, I manifest myself on earth.) - Bhagavad Gita",
+            "उद्धरेदात्मनात्मानं नात्मानमवसादयेत्।\n(Elevate yourself through the power of your mind, and not degrade yourself, for the mind can be the friend and also the enemy of the self.) - Bhagavad Gita"
+        };
+        return quotes[new java.util.Random().nextInt(quotes.length)];
     }
 }
