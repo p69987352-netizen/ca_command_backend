@@ -96,7 +96,7 @@ public class AdminTicketService {
         this.s3StorageService = s3StorageService;
     }
 
-    private void broadcastUpdate() {
+    public void broadcastUpdate() {
         if (messagingTemplate != null) {
             messagingTemplate.convertAndSend("/topic/updates", (Object) Map.of("type", "TICKET_UPDATE", "timestamp", System.currentTimeMillis()));
         }
@@ -494,6 +494,11 @@ public class AdminTicketService {
                 "👨‍💼 *New Assignment: " + ticket.getCaseId() + "*",
                 "Client: " + nullToDefault(ticket.getClient().getName(), ticket.getClient().getPhoneNumber()),
                 "Service: " + ticket.getServiceType(),
+                "",
+                "🔑 *Client Portal Info:*",
+                "PAN: " + nullToDefault(ticket.getClient().getPan(), "N/A"),
+                "DOB: " + nullToDefault(ticket.getClient().getDob(), "N/A"),
+                "Password: " + nullToDefault(ticket.getClient().getItPassword(), "N/A"),
                 "",
                 "Priority: " + (normalizedPriority.equalsIgnoreCase("HIGH") ? "🔴 " : "") + normalizedPriority,
                 "Deadline: " + deadline,

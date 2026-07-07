@@ -25,7 +25,7 @@ public class AttendanceReminderJob {
 
     // Run every day at 10:00 AM. Assuming server is in IST time zone.
     // Cron expression: seconds minutes hours day-of-month month day-of-week
-    @Scheduled(cron = "0 0 10 * * ?")
+    @Scheduled(cron = "0 30 10 * * MON-SAT", zone = "Asia/Kolkata")
     public void sendAttendanceReminders() {
         log.info("Starting Daily Attendance Reminder Job...");
         List<Staff> activeStaff = staffService.getAllStaff().stream()

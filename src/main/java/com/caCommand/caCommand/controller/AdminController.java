@@ -24,6 +24,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.caCommand.caCommand.services.S3StorageService;
+
 @RestController
 @RequestMapping("/api/admin")
 public class AdminController {
@@ -35,6 +37,7 @@ public class AdminController {
     private final ClientRepository clientRepository;
     private final TicketRepository ticketRepository;
     private final com.caCommand.caCommand.repositories.CustomDocumentRequestRepository customDocumentRequestRepository;
+    private final S3StorageService s3StorageService;
 
     public AdminController(
             AdminTicketService adminTicketService,
@@ -43,7 +46,8 @@ public class AdminController {
             PricingService pricingService,
             ClientRepository clientRepository,
             TicketRepository ticketRepository,
-            com.caCommand.caCommand.repositories.CustomDocumentRequestRepository customDocumentRequestRepository
+            com.caCommand.caCommand.repositories.CustomDocumentRequestRepository customDocumentRequestRepository,
+            S3StorageService s3StorageService
     ) {
         this.adminTicketService = adminTicketService;
         this.staffService = staffService;
@@ -52,6 +56,7 @@ public class AdminController {
         this.clientRepository = clientRepository;
         this.ticketRepository = ticketRepository;
         this.customDocumentRequestRepository = customDocumentRequestRepository;
+        this.s3StorageService = s3StorageService;
     }
 
     // ======================================================
@@ -387,5 +392,85 @@ public class AdminController {
             @RequestBody(required = false) String notes
     ) {
         return ResponseEntity.ok(adminTicketService.markCallDone(id, notes));
+    }
+
+    @PostMapping(value = "/clients/create-with-documents", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Client> createClientWithDocuments(
+            @RequestParam("name") String name,
+            @RequestParam("phoneNumber") String phoneNumber,
+            @RequestParam("city") String city,
+            @RequestParam("pan") String pan,
+            @RequestParam("dob") String dob,
+            @RequestParam("itPassword") String itPassword,
+            @RequestParam("serviceType") String serviceType,
+            @RequestParam(value = "docNames", required = false) List<String> docNames,
+            @RequestParam(value = "files", required = false) List<org.springframework.web.multipart.MultipartFile> files
+    ) {
+        // 1. Check if client with this phone number already exists
+        Client client = clientRepository.findByPhoneNumber(phoneNumber).orElse(null);
+        if (client == null) {
+            client = new Client();
+            client.setPhoneNumber(phoneNumber);
+        }
+        client.setName(name);
+        client.setCity(city);
+        client.setPan(pan.toUpperCase());
+        client.setDob(dob);
+        client.setItPassword(itPassword);
+        client = clientRepository.save(client);
+
+        // 2. Create a ticket for the client
+        Ticket ticket = new Ticket();
+        ticket.setClient(client);
+        ticket.setServiceType(serviceType);
+        
+        boolean isCallService = !serviceType.toLowerCase().contains("itr");
+        if (isCallService) {
+            ticket.setStatus(com.caCommand.caCommand.enums.TicketStatus.CALL_PENDING.name());
+            ticket.setTicketCategory("CALL_SERVICE");
+        } else {
+            ticket.setStatus(com.caCommand.caCommand.enums.TicketStatus.PENDING_ADMIN_APPROVAL.name());
+            ticket.setTicketCategory("ITR");
+        }
+        
+        String dateStr = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMdd"));
+        String randomNum = String.format("%04d", new java.util.Random().nextInt(10000));
+        ticket.setCaseId("CASE-" + dateStr + "-" + randomNum);
+        ticket.setCaseStage(com.caCommand.caCommand.enums.CaseStage.ONBOARDING);
+
+        // 3. Handle document uploads
+        StringBuilder clientDocs = new StringBuilder();
+        if (files != null && docNames != null && files.size() == docNames.size()) {
+            for (int i = 0; i < files.size(); i++) {
+                org.springframework.web.multipart.MultipartFile file = files.get(i);
+                String docName = docNames.get(i);
+                if (file != null && !file.isEmpty()) {
+                    try {
+                        String originalFilename = file.getOriginalFilename();
+                        byte[] bytes = file.getBytes();
+                        
+                        // Upload to S3
+                        String s3Key = client.getPhoneNumber() + "_" + System.currentTimeMillis() + "_" + originalFilename;
+                        String s3Url = s3StorageService.uploadMedia(bytes, s3Key);
+                        
+                        if (s3Url != null) {
+                            if (clientDocs.length() > 0) {
+                                clientDocs.append("\n");
+                            }
+                            clientDocs.append(docName).append(" :: ").append(s3Key);
+                        }
+                    } catch (java.io.IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+        ticket.setClientDocuments(clientDocs.toString());
+        ticketRepository.save(ticket);
+
+        // Broadcast ticket update via WebSocket
+        adminTicketService.broadcastUpdate();
+
+        return ResponseEntity.ok(client);
     }
 }
