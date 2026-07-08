@@ -51,4 +51,11 @@ public class Attendance extends BaseEntity {
 
     @UpdateTimestamp
     private LocalDateTime updatedAt;
+
+    public String getCreatedAtIso() {
+        if (this.createdAt == null) return null;
+        return this.createdAt.atZone(java.time.ZoneId.systemDefault())
+                .withZoneSameInstant(java.time.ZoneId.of("Asia/Kolkata"))
+                .format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+    }
 }
