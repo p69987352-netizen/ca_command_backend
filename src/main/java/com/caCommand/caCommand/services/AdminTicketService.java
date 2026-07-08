@@ -263,12 +263,12 @@ public class AdminTicketService {
             java.util.Optional<com.caCommand.caCommand.entities.Attendance> attOpt = attendanceRepository.findByStaffAndAttendanceDate(staff, today);
             boolean marked = attOpt.isPresent() && attOpt.get().getStatus() != com.caCommand.caCommand.enums.AttendanceStatus.NOT_MARKED;
             if (!marked) {
-                String message = String.format("🚩 *Jay Shree Ram everyone* 🚩\n\n" +
-                        "Good Morning %s, 👋\n\n" +
+                String message = String.format("🚩 *Jay Shree Ram* 🚩\n\n" +
+                        "Greetings,\n\n" +
                         "📖 *%s*\n\n" +
-                        "Please upload your photo to mark today's attendance. 📸\n\n" +
-                        "If you are not coming to the office today, simply reply with *NO* so that we can inform the Admin. 🛑", 
-                        staff.getName(), getRandomGitaQuote());
+                        "Please mark your attendance by sending a photo. 📸\n\n" +
+                        "If you are not coming to the office today, reply with *NO <reason>* (e.g. *NO sick*). 🛑", 
+                        getRandomGitaQuote());
                 whatsappMessageSender.sendMessage(staff.getPhoneNumber(), message);
                 log.info("Sent manual attendance reminder to {}", staff.getPhoneNumber());
             }
@@ -384,12 +384,17 @@ public class AdminTicketService {
         Ticket updatedTicket = saveAndBroadcast(ticket);
 
         String messageBody = formatMessage(
-                "dY'3 *PAYMENT REQUESTED*",
-                "Service: " + ticket.getServiceType(),
-                "Fee: Rs. " + String.format("%.2f", request.getFeeAmount()),
+                "🚩 *Jay Shree Ram* 🚩",
+                "",
+                "💳 *PAYMENT REQUESTED*",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                "🔹 *Service:* " + ticket.getServiceType(),
+                "🔹 *Fee:* Rs. " + String.format("%.2f", request.getFeeAmount()),
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
                 "",
                 "Kripya niche diye gaye QR code ka use karke payment karein.",
-                "Payment complete hone ke baad, please apna Screenshot ya UTR number yahan reply mein bhejein taaki hum verify karke process aage badha sakein."
+                "",
+                "Payment complete hone ke baad, please apna Screenshot ya UTR number yahan reply mein share/upload karein taaki hum verify karke work process aage badha sakein. 🙏"
         );
 
         if (paymentQrUrl != null && !paymentQrUrl.isBlank()) {

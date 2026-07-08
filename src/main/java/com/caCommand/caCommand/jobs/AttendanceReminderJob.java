@@ -55,12 +55,12 @@ public class AttendanceReminderJob {
                 continue;
             }
 
-            String message = String.format("🚩 *Jay Shree Ram everyone* 🚩\n\n" +
-                    "Good Morning %s, 👋\n\n" +
+            String message = String.format("🚩 *Jay Shree Ram* 🚩\n\n" +
+                    "Greetings,\n\n" +
                     "📖 *%s*\n\n" +
-                    "Please upload your photo to mark today's attendance. 📸\n\n" +
-                    "If you are not coming to the office today, simply reply with *NO* so that we can inform the Admin. 🛑", 
-                    staff.getName(), getRandomGitaQuote());
+                    "Please mark your attendance by sending a photo. 📸\n\n" +
+                    "If you are not coming to the office today, reply with *NO <reason>* (e.g. *NO sick*). 🛑", 
+                    getRandomGitaQuote());
 
             try {
                 whatsappMessageSender.sendMessage(staff.getPhoneNumber(), message);
