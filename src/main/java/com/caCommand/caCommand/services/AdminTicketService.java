@@ -322,6 +322,7 @@ public class AdminTicketService {
 
         try {
             whatsappMessageSender.sendMessage("+919828700283", sb.toString());
+            whatsappMessageSender.sendMessage("+919783271934", sb.toString());
         } catch (Exception e) {
             e.printStackTrace();
         }
