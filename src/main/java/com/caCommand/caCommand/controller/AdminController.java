@@ -468,6 +468,25 @@ public class AdminController {
         ticket.setClientDocuments(clientDocs.toString());
         ticketRepository.save(ticket);
 
+        // Send WhatsApp notification to client
+        try {
+            String clientMessage = String.format(
+                "🚩 *Jay Shree Ram* 🚩\n\n" +
+                "Greetings %s,\n\n" +
+                "Welcome to *Porwal CA Firm*.\n\n" +
+                "We have successfully registered a new case for you:\n" +
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+                "🔹 *Case ID:* %s\n" +
+                "🔹 *Service:* %s\n" +
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
+                "Our tax specialist team will review your details and contact you shortly. Thank you for choosing us! 🙏",
+                client.getName(), ticket.getCaseId(), ticket.getServiceType()
+            );
+            whatsappMessageSender.sendMessage(client.getPhoneNumber(), clientMessage);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         // Broadcast ticket update via WebSocket
         adminTicketService.broadcastUpdate();
 
