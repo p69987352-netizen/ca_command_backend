@@ -242,6 +242,91 @@ public class AdminTicketService {
         return signAttendanceUrls(attendanceRepository.findByAttendanceDateBetweenOrderByAttendanceDateDesc(startOfMonth, endOfMonth));
     }
 
+    public void generateAndSendAttendanceReport() {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
+        List<Staff> activeStaff = staffRepository.findAll().stream()
+                .filter(Staff::getIsActive)
+                .toList();
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("📊 *Daily Staff Attendance Report — %s* 📊\n\n", today));
+
+        List<com.caCommand.caCommand.entities.Attendance> todayAttendance = attendanceRepository.findByAttendanceDate(today);
+
+        List<Staff> presentStaff = new java.util.ArrayList<>();
+        List<com.caCommand.caCommand.entities.Attendance> presentRecords = new java.util.ArrayList<>();
+        List<Staff> absentStaff = new java.util.ArrayList<>();
+        List<com.caCommand.caCommand.entities.Attendance> absentRecords = new java.util.ArrayList<>();
+        List<Staff> pendingStaff = new java.util.ArrayList<>();
+
+        for (Staff staff : activeStaff) {
+            java.util.Optional<com.caCommand.caCommand.entities.Attendance> recordOpt = todayAttendance.stream()
+                    .filter(a -> a.getStaff().getId().equals(staff.getId()))
+                    .findFirst();
+
+            if (recordOpt.isPresent()) {
+                com.caCommand.caCommand.entities.Attendance record = recordOpt.get();
+                if (com.caCommand.caCommand.enums.AttendanceStatus.PRESENT.equals(record.getStatus())) {
+                    presentStaff.add(staff);
+                    presentRecords.add(record);
+                } else if (com.caCommand.caCommand.enums.AttendanceStatus.ABSENT.equals(record.getStatus())) {
+                    absentStaff.add(staff);
+                    absentRecords.add(record);
+                }
+            } else {
+                pendingStaff.add(staff);
+            }
+        }
+
+        sb.append(String.format("📈 *Summary:*\n• Present: %d\n• Absent: %d\n• Not Marked (Pending): %d\n\n", 
+                presentStaff.size(), absentStaff.size(), pendingStaff.size()));
+        sb.append("━━━━━━━━━━━━━━━━━━━━━\n\n");
+
+        if (!presentStaff.isEmpty()) {
+            sb.append("✅ *PRESENT:*\n");
+            for (int i = 0; i < presentStaff.size(); i++) {
+                Staff s = presentStaff.get(i);
+                com.caCommand.caCommand.entities.Attendance r = presentRecords.get(i);
+                java.time.LocalDateTime checkInTime = r.getCreatedAt();
+                String timeStr = "N/A";
+                if (checkInTime != null) {
+                    timeStr = checkInTime.atZone(java.time.ZoneId.of("UTC"))
+                            .withZoneSameInstant(java.time.ZoneId.of("Asia/Kolkata"))
+                            .toLocalTime()
+                            .format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a"));
+                }
+                sb.append(String.format("• %s (%s)\n", s.getName(), timeStr));
+            }
+            sb.append("\n");
+        }
+
+        if (!absentStaff.isEmpty()) {
+            sb.append("❌ *ABSENT:*\n");
+            for (int i = 0; i < absentStaff.size(); i++) {
+                Staff s = absentStaff.get(i);
+                com.caCommand.caCommand.entities.Attendance r = absentRecords.get(i);
+                sb.append(String.format("• %s (Reason: %s)\n", s.getName(), r.getReason() != null ? r.getReason() : "No reason specified"));
+            }
+            sb.append("\n");
+        }
+
+        if (!pendingStaff.isEmpty()) {
+            sb.append("⚠️ *NOT MARKED (PENDING):*\n");
+            for (Staff s : pendingStaff) {
+                sb.append(String.format("• %s\n", s.getName()));
+            }
+            sb.append("\n");
+        }
+
+        sb.append("━━━━━━━━━━━━━━━━━━━━━\nRegards,\n*CA Command Center*");
+
+        try {
+            whatsappMessageSender.sendMessage("+919828700283", sb.toString());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     private List<com.caCommand.caCommand.entities.Attendance> signAttendanceUrls(List<com.caCommand.caCommand.entities.Attendance> list) {
         if (list == null) return null;
         for (com.caCommand.caCommand.entities.Attendance attendance : list) {
@@ -263,7 +348,7 @@ public class AdminTicketService {
             java.util.Optional<com.caCommand.caCommand.entities.Attendance> attOpt = attendanceRepository.findByStaffAndAttendanceDate(staff, today);
             boolean marked = attOpt.isPresent() && attOpt.get().getStatus() != com.caCommand.caCommand.enums.AttendanceStatus.NOT_MARKED;
             if (!marked) {
-                String message = String.format("🚩 *Jay Shree Ram* 🚩\n\n" +
+                String message = String.format("🚩 *Jai Shree Ram* 🚩\n\n" +
                         "Greetings,\n\n" +
                         "📖 *%s*\n\n" +
                         "Please mark your attendance by sending a photo. 📸\n\n" +
@@ -384,7 +469,7 @@ public class AdminTicketService {
         Ticket updatedTicket = saveAndBroadcast(ticket);
 
         String messageBody = formatMessage(
-                "🚩 *Jay Shree Ram* 🚩",
+                "🚩 *Jai Shree Ram* 🚩",
                 "",
                 "💳 *PAYMENT REQUESTED*",
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━",

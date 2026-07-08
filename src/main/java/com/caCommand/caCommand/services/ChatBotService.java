@@ -177,7 +177,7 @@ public class ChatBotService {
                     session.setClientName(client.getName());
                     session.setCurrentState(ChatState.SERVICE_SELECTION_SHOWN);
                     this.sessionRepository.save(session);
-                    this.send(phoneNumber, session, "🚩 *Jay Shree Ram* 🚩\n\n" +
+                    this.send(phoneNumber, session, "🚩 *Jai Shree Ram* 🚩\n\n" +
                             "✨ *Welcome to LegalFactory*\n\n" +
                             "👋 Welcome back, " + client.getName() + "!\n\n" +
                             "📖 *" + getRandomGitaQuote() + "*\n\n" +
@@ -190,7 +190,7 @@ public class ChatBotService {
                 }
                 session.setCurrentState(ChatState.COLLECTING_NAME);
                 this.sessionRepository.save(session);
-                this.send(phoneNumber, session, "🚩 *Jay Shree Ram* 🚩\n\n✨ *Welcome to LegalFactory*");
+                this.send(phoneNumber, session, "🚩 *Jai Shree Ram* 🚩\n\n✨ *Welcome to LegalFactory*");
                 this.send(phoneNumber, session, "📖 *" + getRandomGitaQuote() + "*\n\nThis is ARJUN - the AI assistant to help you.");
                 this.send(phoneNumber, session, "I'll help you with your tax and compliance requirements today.");
                 this.send(phoneNumber, session, "To get started, may I know your full name?");
@@ -660,7 +660,6 @@ public class ChatBotService {
                 && staffSession.getExpiresAt() != null 
                 && staffSession.getExpiresAt().isAfter(LocalDateTime.now());
 
-        // Attendance Logic - ONLY if not in an active case session
         if (attendance == null && !hasActiveSession) {
             if ("image".equals(messageType)) {
                 String savedFilePath = this.whatsappMediaService.downloadAndSaveMedia(messageContent, staff.getPhoneNumber());
@@ -670,6 +669,7 @@ public class ChatBotService {
                     newAttendance.setAttendanceDate(today);
                     newAttendance.setStatus(com.caCommand.caCommand.enums.AttendanceStatus.PRESENT);
                     newAttendance.setPhotoUrl(savedFilePath);
+                    newAttendance.setCreatedAt(LocalDateTime.now());
                     this.attendanceRepository.save(newAttendance);
                     this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Aapki aaj ki attendance MARK ho gayi hai (PRESENT). Have a great day at work! 🏢");
                     return;
@@ -683,6 +683,7 @@ public class ChatBotService {
                 if (!reason.isEmpty()) {
                     newAttendance.setReason(reason);
                 }
+                newAttendance.setCreatedAt(LocalDateTime.now());
                 this.attendanceRepository.save(newAttendance);
                 this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "❌ Aapki aaj ki attendance ABSENT mark kar di gayi hai. Admin has been informed.");
                 return;
@@ -727,7 +728,7 @@ public class ChatBotService {
         // Generic Greetings
         if (inputUpper.equals("HI") || inputUpper.equals("HELLO") || inputUpper.equals("HEY") || inputUpper.equals("START") || inputUpper.equals("HII")) {
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), 
-                "🚩 *Jay Shree Ram* 🚩\n\n" +
+                "🚩 *Jai Shree Ram* 🚩\n\n" +
                 "Greetings " + staff.getName() + ",\n\n" +
                 "Welcome to the *CA Command Staff Portal*.\n\n" +
                 "Here are the quick commands to manage your workspace today:\n\n" +

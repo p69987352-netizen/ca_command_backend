@@ -55,7 +55,7 @@ public class AttendanceReminderJob {
                 continue;
             }
 
-            String message = String.format("🚩 *Jay Shree Ram* 🚩\n\n" +
+            String message = String.format("🚩 *Jai Shree Ram* 🚩\n\n" +
                     "Greetings,\n\n" +
                     "📖 *%s*\n\n" +
                     "Please mark your attendance by sending a photo. 📸\n\n" +

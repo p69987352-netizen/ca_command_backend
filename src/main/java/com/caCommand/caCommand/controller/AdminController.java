@@ -319,6 +319,12 @@ public class AdminController {
         return ResponseEntity.ok("Attendance reminders dispatched successfully.");
     }
 
+    @PostMapping("/staff/generate-report")
+    public ResponseEntity<String> generateAndSendAttendanceReport() {
+        adminTicketService.generateAndSendAttendanceReport();
+        return ResponseEntity.ok("Attendance report generated and sent successfully to Super Admin.");
+    }
+
     // ======================================================
     // 📜 CLIENT HISTORY
     // ======================================================
@@ -471,7 +477,7 @@ public class AdminController {
         // Send WhatsApp notification to client
         try {
             String clientMessage = String.format(
-                "🚩 *Jay Shree Ram* 🚩\n\n" +
+                "🚩 *Jai Shree Ram* 🚩\n\n" +
                 "Greetings %s,\n\n" +
                 "Welcome to *Porwal CA Firm*.\n\n" +
                 "We have successfully registered a new case for you:\n" +
