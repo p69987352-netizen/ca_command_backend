@@ -512,6 +512,11 @@ public class AdminTicketService {
         String deadline = payload != null && payload.deadline() != null ? payload.deadline() : "Not specified";
         String language = payload != null && payload.language() != null ? payload.language() : "English/Hindi";
 
+        boolean isCall = TicketStatus.CALL_PENDING.name().equals(ticket.getStatus());
+        String instruction = isCall ?
+                "💡 *Call done mark karne ke liye:* Pehle reply karein `SELECT " + ticket.getCaseId() + "` aur phir `DONE` type karein." :
+                "💡 *Task completed mark karne ke liye:* Pehle reply karein `SELECT " + ticket.getCaseId() + "` aur phir final PDF/Image upload karein.";
+
         whatsappMessageSender.sendMessage(staff.getPhoneNumber(), formatMessage(
                 "👨‍💼 *New Assignment: " + ticket.getCaseId() + "*",
                 "Client: " + nullToDefault(ticket.getClient().getName(), ticket.getClient().getPhoneNumber()),
@@ -526,7 +531,9 @@ public class AdminTicketService {
                 "Deadline: " + deadline,
                 "Language: " + language,
                 "Notes: " + nullToDefault(notes, "No additional notes."),
-                aisPdfLink
+                aisPdfLink,
+                "",
+                instruction
         ));
 
         log.info("Assigned ticket id={} to staff id={} priority={}", ticketId, staffIdentifier, normalizedPriority);
