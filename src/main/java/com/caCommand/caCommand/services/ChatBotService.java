@@ -728,11 +728,16 @@ public class ChatBotService {
         if (inputUpper.equals("HI") || inputUpper.equals("HELLO") || inputUpper.equals("HEY") || inputUpper.equals("START") || inputUpper.equals("HII")) {
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), 
                 "🚩 *Jay Shree Ram* 🚩\n\n" +
-                "👋 Hello " + staff.getName() + "!\n\n" +
-                "Welcome to the CA Command Staff Portal.\n\n" +
-                "📌 Type *LIST* to view your assigned tasks.\n" +
-                "📌 Send a *photo* to mark your daily attendance.\n" +
-                "📌 Type *NO <reason>* (e.g., *NO sick*) if you are absent today.");
+                "Greetings " + staff.getName() + ",\n\n" +
+                "Welcome to the *CA Command Staff Portal*.\n\n" +
+                "Here are the quick commands to manage your workspace today:\n\n" +
+                "📋 *Task Management:*\n" +
+                "• Type *LIST* to view your assigned cases and tasks.\n\n" +
+                "📸 *Daily Attendance:*\n" +
+                "• Please send a *photo* to mark your attendance for today.\n\n" +
+                "🛑 *Leave/Absence:*\n" +
+                "• If you are unable to report to duty, reply with *NO <reason>* (e.g., *NO sick*).\n\n" +
+                "Have a productive day ahead! 💼");
             return;
         }
 
