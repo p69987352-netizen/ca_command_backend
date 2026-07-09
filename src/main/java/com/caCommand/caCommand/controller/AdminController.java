@@ -266,7 +266,7 @@ public class AdminController {
                 newStaff.getPhoneNumber(),
                 "staff_welcome_new",
                 "en_us",
-                java.util.List.of(newStaff.getName())
+                java.util.List.of()
         );
         
         return ResponseEntity.ok(newStaff);
