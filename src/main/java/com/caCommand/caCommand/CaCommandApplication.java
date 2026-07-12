@@ -13,7 +13,13 @@ import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 @EnableJpaAuditing
 public class CaCommandApplication {
 
+	@jakarta.annotation.PostConstruct
+	public void init() {
+		java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Kolkata"));
+	}
+
 	public static void main(String[] args)	 {
+		java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Kolkata"));
 		SpringApplication.run(CaCommandApplication.class, args);
 	}
 }
