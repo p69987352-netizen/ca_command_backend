@@ -76,4 +76,11 @@ public class Attendance extends BaseEntity {
                 .withZoneSameInstant(java.time.ZoneId.of("Asia/Kolkata"))
                 .format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME);
     }
+
+    public String getExitTimeIso() {
+        if (this.exitTime == null) return null;
+        return this.exitTime.atZone(java.time.ZoneId.systemDefault())
+                .withZoneSameInstant(java.time.ZoneId.of("Asia/Kolkata"))
+                .format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+    }
 }
