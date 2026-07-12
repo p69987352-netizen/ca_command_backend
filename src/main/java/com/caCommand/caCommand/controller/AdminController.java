@@ -211,24 +211,57 @@ public class AdminController {
     // 📄 PDF DOWNLOAD
     // ======================================================
     @GetMapping("/tickets/{ticketId}/download-pdf")
-    public ResponseEntity<org.springframework.core.io.Resource> downloadPdf(@PathVariable String ticketId) {
+    public ResponseEntity<?> downloadPdf(@PathVariable String ticketId) {
         Ticket ticket = ticketRepository.findById(java.util.UUID.fromString(ticketId)).orElseThrow();
-        if (ticket.getAisPdfPath() == null || ticket.getAisPdfPath().isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        try {
-            java.nio.file.Path path = java.nio.file.Paths.get(ticket.getAisPdfPath());
-            org.springframework.core.io.Resource resource = new org.springframework.core.io.UrlResource(path.toUri());
-            if (resource.exists() || resource.isReadable()) {
-                return ResponseEntity.ok()
-                        .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
-                        .body(resource);
-            } else {
-                return ResponseEntity.notFound().build();
+        
+        // 1. Try aisPdfPath
+        if (ticket.getAisPdfPath() != null && !ticket.getAisPdfPath().isEmpty()) {
+            try {
+                java.nio.file.Path path = java.nio.file.Paths.get(ticket.getAisPdfPath());
+                org.springframework.core.io.Resource resource = new org.springframework.core.io.UrlResource(path.toUri());
+                if (resource.exists() || resource.isReadable()) {
+                    return ResponseEntity.ok()
+                            .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
+                            .body(resource);
+                }
+            } catch (Exception e) {
+                // fall through
             }
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().build();
         }
+        
+        // 2. Try staffSubmittedDocument
+        if (ticket.getStaffSubmittedDocument() != null && !ticket.getStaffSubmittedDocument().isEmpty()) {
+            String url = ticket.getStaffSubmittedDocument();
+            String signedUrl = s3StorageService.getSignedUrl(url);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.FOUND)
+                    .location(java.net.URI.create(signedUrl))
+                    .build();
+        }
+        
+        // 3. Try clientDocuments
+        if (ticket.getClientDocuments() != null && !ticket.getClientDocuments().isEmpty()) {
+            String docs = ticket.getClientDocuments();
+            for (String line : docs.split("\n")) {
+                if (line.contains("::")) {
+                    String url = line.split("::")[1].trim();
+                    String signedUrl = s3StorageService.getSignedUrl(url);
+                    return ResponseEntity.status(org.springframework.http.HttpStatus.FOUND)
+                            .location(java.net.URI.create(signedUrl))
+                            .build();
+                } else if (line.contains("http")) {
+                    int start = line.indexOf("http");
+                    String url = line.substring(start).trim();
+                    String signedUrl = s3StorageService.getSignedUrl(url);
+                    return ResponseEntity.status(org.springframework.http.HttpStatus.FOUND)
+                            .location(java.net.URI.create(signedUrl))
+                            .build();
+                }
+            }
+        }
+        
+        return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(Map.of("message", "No reports or documents have been uploaded for this ticket yet."));
     }
 
     // ======================================================
@@ -314,8 +347,9 @@ public class AdminController {
     }
 
     @PostMapping("/staff/remind-attendance")
-    public ResponseEntity<String> sendManualAttendanceReminders() {
-        adminTicketService.sendManualAttendanceReminders();
+    public ResponseEntity<String> sendManualAttendanceReminders(@RequestBody(required = false) java.util.Map<String, java.util.List<String>> payload) {
+        java.util.List<String> staffIds = payload != null ? payload.get("staffIds") : null;
+        adminTicketService.sendManualAttendanceReminders(staffIds);
         return ResponseEntity.ok("Attendance reminders dispatched successfully.");
     }
 
@@ -323,6 +357,16 @@ public class AdminController {
     public ResponseEntity<String> generateAndSendAttendanceReport() {
         adminTicketService.generateAndSendAttendanceReport();
         return ResponseEntity.ok("Attendance report generated and sent successfully to Super Admin.");
+    }
+
+    @PutMapping("/staff/attendance/{attendanceId}/location")
+    public ResponseEntity<com.caCommand.caCommand.entities.Attendance> updateAttendanceLocation(
+            @PathVariable java.util.UUID attendanceId,
+            @RequestBody java.util.Map<String, String> payload
+    ) {
+        String locationLink = payload.get("locationLink");
+        String exitLocationLink = payload.get("exitLocationLink");
+        return ResponseEntity.ok(adminTicketService.updateAttendanceLocation(attendanceId, locationLink, exitLocationLink));
     }
 
     // ======================================================
@@ -497,5 +541,73 @@ public class AdminController {
         adminTicketService.broadcastUpdate();
 
         return ResponseEntity.ok(client);
+    }
+
+    public record CreateTaskRequest(String clientName, String clientPhoneNumber, String serviceType, String assignedStaffId, String notes) {}
+
+    @PostMapping(value = "/tickets/create-task", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Ticket> createTask(
+            @RequestParam("clientName") String clientName,
+            @RequestParam("clientPhoneNumber") String clientPhoneNumber,
+            @RequestParam("serviceType") String serviceType,
+            @RequestParam("assignedStaffId") String assignedStaffId,
+            @RequestParam(value = "notes", required = false) String notes,
+            @RequestParam(value = "file", required = false) org.springframework.web.multipart.MultipartFile file,
+            @RequestParam(value = "files", required = false) org.springframework.web.multipart.MultipartFile[] files,
+            @RequestParam(value = "fileNames", required = false) String[] fileNames
+    ) {
+        StringBuilder s3UrlsBuilder = new StringBuilder();
+        String cleanPhone = clientPhoneNumber.replaceAll("[^0-9]", "");
+        
+        if (file != null && !file.isEmpty()) {
+            try {
+                String s3Key = cleanPhone + "_task_" + System.currentTimeMillis() + "_" + file.getOriginalFilename();
+                String s3Url = s3StorageService.uploadMedia(file.getBytes(), s3Key);
+                if (s3Url != null) {
+                    s3UrlsBuilder.append(s3Url);
+                }
+            } catch (java.io.IOException e) {
+                e.printStackTrace();
+            }
+        }
+        
+        if (files != null && files.length > 0) {
+            for (int i = 0; i < files.length; i++) {
+                org.springframework.web.multipart.MultipartFile f = files[i];
+                if (f != null && !f.isEmpty()) {
+                    try {
+                        String s3Key = cleanPhone + "_task_" + System.currentTimeMillis() + "_" + f.getOriginalFilename();
+                        String s3Url = s3StorageService.uploadMedia(f.getBytes(), s3Key);
+                        if (s3Url != null) {
+                            String customName = (fileNames != null && fileNames.length > i && fileNames[i] != null && !fileNames[i].isBlank()) 
+                                    ? fileNames[i].trim() 
+                                    : "Admin Document";
+                            if (s3UrlsBuilder.length() > 0) {
+                                s3UrlsBuilder.append("\n");
+                            }
+                            s3UrlsBuilder.append(customName).append(" :: ").append(s3Url);
+                        }
+                    } catch (java.io.IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+        
+        Ticket t = adminTicketService.createTask(
+            clientName,
+            clientPhoneNumber,
+            serviceType,
+            assignedStaffId,
+            notes,
+            s3UrlsBuilder.length() > 0 ? s3UrlsBuilder.toString() : null
+        );
+        return ResponseEntity.ok(t);
+    }
+
+    @DeleteMapping("/tickets/{ticketId}")
+    public ResponseEntity<String> deleteTicket(@PathVariable String ticketId) {
+        adminTicketService.deleteTicket(ticketId);
+        return ResponseEntity.ok("Ticket deleted successfully.");
     }
 }

@@ -71,7 +71,11 @@ public class WebhookProcessorService {
                 String filename = messageNode.path("document").path("filename").asText("");
                 yield id + "|" + filename;
             }
-            case "image" -> messageNode.path("image").path("id").asText();
+            case "image" -> {
+                String id = messageNode.path("image").path("id").asText();
+                String caption = messageNode.path("image").path("caption").asText("");
+                yield id + "|" + caption;
+            }
             case "location" -> messageNode.path("location").path("latitude").asText()
                     + "," + messageNode.path("location").path("longitude").asText();
             default -> "";

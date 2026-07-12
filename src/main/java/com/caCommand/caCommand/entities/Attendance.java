@@ -37,6 +37,24 @@ public class Attendance extends BaseEntity {
     @Column(name = "photo_url", columnDefinition = "TEXT")
     private String photoUrl;
 
+    @Column(name = "location_link", columnDefinition = "TEXT")
+    private String locationLink;
+
+    @Column(name = "exit_photo_url", columnDefinition = "TEXT")
+    private String exitPhotoUrl;
+
+    @Column(name = "exit_time")
+    private java.time.LocalDateTime exitTime;
+
+    @Column(name = "exit_location_link", columnDefinition = "TEXT")
+    private String exitLocationLink;
+
+    @Column(name = "is_verified_entry")
+    private Boolean isVerifiedEntry;
+
+    @Column(name = "is_verified_exit")
+    private Boolean isVerifiedExit;
+
     @Column(columnDefinition = "TEXT")
     private String reason;
 

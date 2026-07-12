@@ -38,6 +38,7 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -66,11 +67,39 @@ public class ChatBotService {
     private final PipelineOrchestrator pipelineOrchestrator;
     private final ApplicationEventPublisher eventPublisher;
     private final com.caCommand.caCommand.repositories.AttendanceRepository attendanceRepository;
+    private final String adminPhoneNumber;
+
+    @Value("${office.latitude:26.4734}")
+    private double officeLatitude;
+
+    @Value("${office.longitude:74.6426}")
+    private double officeLongitude;
+
+    @Value("${office.radius-meters:200}")
+    private double officeRadiusMeters;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(5);
     private final Map<String, ScheduledFuture<?>> pendingMessages = new ConcurrentHashMap();
 
     @Autowired
-    public ChatBotService(ChatSessionRepository sessionRepository, ClientRepository clientRepository, TicketRepository ticketRepository, WhatsAppMessageSender whatsappMessageSender, WhatsAppMediaService whatsappMediaService, StaffRepository staffRepository, com.caCommand.caCommand.repositories.StaffSessionRepository staffSessionRepository, GeminiService geminiService, LocationService locationService, LegacyDocumentExtractionService documentExtractionService, SimpMessagingTemplate messagingTemplate, CustomDocumentRequestRepository customDocumentRequestRepository, S3StorageService s3StorageService, PipelineOrchestrator pipelineOrchestrator, ApplicationEventPublisher eventPublisher, com.caCommand.caCommand.repositories.AttendanceRepository attendanceRepository) {
+    public ChatBotService(
+            ChatSessionRepository sessionRepository,
+            ClientRepository clientRepository,
+            TicketRepository ticketRepository,
+            WhatsAppMessageSender whatsappMessageSender,
+            WhatsAppMediaService whatsappMediaService,
+            StaffRepository staffRepository,
+            com.caCommand.caCommand.repositories.StaffSessionRepository staffSessionRepository,
+            GeminiService geminiService,
+            LocationService locationService,
+            LegacyDocumentExtractionService documentExtractionService,
+            SimpMessagingTemplate messagingTemplate,
+            CustomDocumentRequestRepository customDocumentRequestRepository,
+            S3StorageService s3StorageService,
+            PipelineOrchestrator pipelineOrchestrator,
+            ApplicationEventPublisher eventPublisher,
+            com.caCommand.caCommand.repositories.AttendanceRepository attendanceRepository,
+            @Value("${whatsapp.admin-phone-number}") String adminPhoneNumber
+    ) {
         this.sessionRepository = sessionRepository;
         this.clientRepository = clientRepository;
         this.ticketRepository = ticketRepository;
@@ -87,6 +116,7 @@ public class ChatBotService {
         this.pipelineOrchestrator = pipelineOrchestrator;
         this.eventPublisher = eventPublisher;
         this.attendanceRepository = attendanceRepository;
+        this.adminPhoneNumber = adminPhoneNumber;
     }
 
     @PreDestroy
@@ -113,6 +143,19 @@ public class ChatBotService {
             cleanPhone = cleanPhone.substring(2);
         }
         final String searchPhone = cleanPhone;
+
+        // Admin commands interceptor
+        String senderPhone = phoneNumber.replaceAll("[^0-9]", "");
+        String targetAdmin = this.adminPhoneNumber != null ? this.adminPhoneNumber.replaceAll("[^0-9]", "") : "";
+        if (!targetAdmin.isEmpty() && (senderPhone.equals(targetAdmin) || 
+            (senderPhone.startsWith("91") && senderPhone.substring(2).equals(targetAdmin)) || 
+            (targetAdmin.startsWith("91") && targetAdmin.substring(2).equals(senderPhone)))) {
+            
+            if ("text".equals(messageType) && "All pending list staff".equalsIgnoreCase(messageContent.trim())) {
+                this.handleAdminWorkloadQuery(phoneNumber);
+                return;
+            }
+        }
 
         Staff staff = this.staffRepository.findByPhoneNumber(phoneNumber)
                 .or(() -> this.staffRepository.findByPhoneNumber(searchPhone))
@@ -660,9 +703,69 @@ public class ChatBotService {
                 && staffSession.getExpiresAt() != null 
                 && staffSession.getExpiresAt().isAfter(LocalDateTime.now());
 
+        // 1. Geolocation handler
+        if ("location".equals(messageType)) {
+            if (attendance == null) {
+                this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "⚠️ Attendance check-in nahi mila. Pehle check-in photo with caption 'ENTER' bhejein.");
+                return;
+            }
+            boolean isVerified = verifyLocation(messageContent);
+            if (attendance.getExitTime() != null) {
+                if (attendance.getExitLocationLink() == null) {
+                    attendance.setExitLocationLink("https://www.google.com/maps?q=" + messageContent);
+                    attendance.setIsVerifiedExit(isVerified);
+                    this.attendanceRepository.save(attendance);
+                    if (isVerified) {
+                        log.info("Exit location verified for staff: {}", staff.getName());
+                    } else {
+                        log.warn("Exit location not verified (outside boundary) for staff: {}", staff.getName());
+                    }
+                    String gitaQuote = getRandomGitaQuote();
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
+                        "✅ Dhanyawad! Aapki exit attendance save ho gayi hai. Have a good evening! 🏡\n\n" +
+                        "📖 *Bhagavad Gita Quote:*\n" + gitaQuote);
+                } else {
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "ℹ️ Exit location pehle se hi saved hai.");
+                }
+            } else {
+                if (attendance.getLocationLink() == null) {
+                    attendance.setLocationLink("https://www.google.com/maps?q=" + messageContent);
+                    attendance.setIsVerifiedEntry(isVerified);
+                    this.attendanceRepository.save(attendance);
+                    if (isVerified) {
+                        log.info("Check-in location verified for staff: {}", staff.getName());
+                    } else {
+                        log.warn("Check-in location not verified (outside boundary) for staff: {}", staff.getName());
+                    }
+                    String gitaQuote = getRandomGitaQuote();
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
+                        "✅ Dhanyawad! Aapki check-in attendance save ho gayi hai. Aapka din shubh ho! 🏢\n\n" +
+                        "📖 *Bhagavad Gita Quote of the Day:*\n" + gitaQuote +
+                        "\n\n💡 Yaad rakhein: Shaam ko exit karne ke liye exit photo ke saath 'EXIT' caption likhein aur location share karein.");
+                } else {
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "ℹ️ Check-in location pehle se hi saved hai.");
+                }
+            }
+            return;
+        }
+
+        // 2. Attendance Check-In (if not checked in yet)
         if (attendance == null && !hasActiveSession) {
             if ("image".equals(messageType)) {
-                String savedFilePath = this.whatsappMediaService.downloadAndSaveMedia(messageContent, staff.getPhoneNumber());
+                String mediaId = messageContent;
+                String caption = "";
+                if (messageContent.contains("|")) {
+                    String[] parts = messageContent.split("\\|", 2);
+                    mediaId = parts[0];
+                    caption = parts[1].trim().toUpperCase(Locale.ROOT);
+                }
+                
+                if ("EXIT".equals(caption)) {
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "⚠️ Check-in record nahi mila. Pehle check-in selfie with caption 'ENTER' bhejein.");
+                    return;
+                }
+                
+                String savedFilePath = this.whatsappMediaService.downloadAndSaveMedia(mediaId, staff.getPhoneNumber());
                 if (savedFilePath != null) {
                     com.caCommand.caCommand.entities.Attendance newAttendance = new com.caCommand.caCommand.entities.Attendance();
                     newAttendance.setStaff(staff);
@@ -671,7 +774,13 @@ public class ChatBotService {
                     newAttendance.setPhotoUrl(savedFilePath);
                     newAttendance.setCreatedAt(LocalDateTime.now());
                     this.attendanceRepository.save(newAttendance);
-                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Aapki aaj ki attendance MARK ho gayi hai (PRESENT). Have a great day at work! 🏢");
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
+                        "📸 Thank you! Check-in selfie mil gaya hai.\n\n" +
+                        "Ab apni location share karne ke liye:\n" +
+                        "1. Chat box ke paas (+) ya (📎) paperclip icon par click karein.\n" +
+                        "2. 'Location' select karein.\n" +
+                        "3. 'Send Your Current Location' ya 'Share Live Location' par tap karein.\n\n" +
+                        "Isse aapka check-in process finalize ho jaega.");
                     return;
                 }
             } else if ("text".equals(messageType) && inputUpper.startsWith("NO")) {
@@ -687,6 +796,32 @@ public class ChatBotService {
                 this.attendanceRepository.save(newAttendance);
                 this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "❌ Aapki aaj ki attendance ABSENT mark kar di gayi hai. Admin has been informed.");
                 return;
+            }
+        }
+
+        // 3. Attendance Check-Out (if already checked in today)
+        if (attendance != null && !hasActiveSession && "image".equals(messageType)) {
+            String mediaId = messageContent;
+            String caption = "";
+            if (messageContent.contains("|")) {
+                String[] parts = messageContent.split("\\|", 2);
+                mediaId = parts[0];
+                caption = parts[1].trim().toUpperCase(Locale.ROOT);
+            }
+            
+            if ("EXIT".equals(caption)) {
+                if (attendance.getExitTime() != null) {
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "ℹ️ Aap pehle se check-out ho chuke hain.");
+                    return;
+                }
+                String savedFilePath = this.whatsappMediaService.downloadAndSaveMedia(mediaId, staff.getPhoneNumber());
+                if (savedFilePath != null) {
+                    attendance.setExitPhotoUrl(savedFilePath);
+                    attendance.setExitTime(LocalDateTime.now());
+                    this.attendanceRepository.save(attendance);
+                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "📸 Exit selfie received! Ab apna live/current location share karein to finalize your check-out.");
+                    return;
+                }
             }
         }
 
@@ -730,12 +865,14 @@ public class ChatBotService {
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), 
                 "🚩 *Jai Shree Ram* 🚩\n\n" +
                 "Greetings " + staff.getName() + ",\n\n" +
-                "Welcome to the *CA Command Staff Portal*.\n\n" +
+                "Welcome to the *SPC - CC Staff Portal*.\n\n" +
                 "Here are the quick commands to manage your workspace today:\n\n" +
                 "📋 *Task Management:*\n" +
                 "• Type *LIST* to view your assigned cases and tasks.\n\n" +
                 "📸 *Daily Attendance:*\n" +
-                "• Please send a *photo* to mark your attendance for today.\n\n" +
+                "• Send photo with caption *ENTER* to mark entry check-in.\n" +
+                "• Send photo with caption *EXIT* to mark exit check-out.\n" +
+                "• Share your GPS Location right after sending the photo to log your location.\n\n" +
                 "🛑 *Leave/Absence:*\n" +
                 "• If you are unable to report to duty, reply with *NO <reason>* (e.g., *NO sick*).\n\n" +
                 "Have a productive day ahead! 💼");
@@ -764,7 +901,11 @@ public class ChatBotService {
         String clientDisplay = this.nullToDefault(workingTicket.getClient().getName(), clientPhoneNumber);
 
         if ("document".equals(messageType) || "image".equals(messageType)) {
-            String savedFilePath = this.whatsappMediaService.downloadAndSaveMedia(messageContent, staff.getPhoneNumber());
+            String mediaId = messageContent;
+            if ("image".equals(messageType) && messageContent.contains("|")) {
+                mediaId = messageContent.split("\\|", 2)[0];
+            }
+            String savedFilePath = this.whatsappMediaService.downloadAndSaveMedia(mediaId, staff.getPhoneNumber());
             if (savedFilePath == null) {
                 this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "❌ Document upload fail ho gaya. Dobara try karo.");
                 return;
@@ -774,6 +915,28 @@ public class ChatBotService {
             workingTicket.setProgressPercent(90);
             this.saveAndBroadcast(workingTicket);
             this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Work submitted for admin QC review for " + workingTicket.getCaseId());
+            
+            // Notify Admin
+            String adminMsg = String.format("📢 *QC Review Alert:*\nStaff member *%s* has completed task *%s* for client *%s*.\n\nPlease review and approve from the Admin Dashboard.", 
+                staff.getName(), workingTicket.getCaseId(), clientDisplay);
+            this.whatsappMessageSender.sendMessage(this.adminPhoneNumber, adminMsg);
+
+            // Auto-archive session
+            staffSession.setActiveCaseId(null);
+            this.staffSessionRepository.save(staffSession);
+            return;
+        }
+
+        if (inputUpper.equals("DONE")) {
+            workingTicket.setStatus(TicketStatus.PENDING_ADMIN_QC.name());
+            workingTicket.setProgressPercent(90);
+            this.saveAndBroadcast(workingTicket);
+            this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "✅ Case status set to QC review for " + workingTicket.getCaseId());
+            
+            // Notify Admin
+            String adminMsg = String.format("📢 *QC Review Alert:*\nStaff member *%s* has completed task *%s* for client *%s*.\n\nPlease review and approve from the Admin Dashboard.", 
+                staff.getName(), workingTicket.getCaseId(), clientDisplay);
+            this.whatsappMessageSender.sendMessage(this.adminPhoneNumber, adminMsg);
             
             // Auto-archive session
             staffSession.setActiveCaseId(null);
@@ -1145,5 +1308,57 @@ public class ChatBotService {
             "उद्धरेदात्मनात्मानं नात्मानमवसादयेत्।\n(Elevate yourself through the power of your mind, and not degrade yourself, for the mind can be the friend and also the enemy of the self.) - Bhagavad Gita"
         };
         return quotes[new java.util.Random().nextInt(quotes.length)];
+    }
+
+    private void handleAdminWorkloadQuery(String adminPhone) {
+        List<Staff> allStaff = this.staffRepository.findAll();
+        StringBuilder sb = new StringBuilder("📋 *All Staff Pending Tasks List*\n\n");
+        boolean hasPending = false;
+        
+        for (Staff s : allStaff) {
+            List<Ticket> activeTickets = this.ticketRepository.findByAssignedStaffIdAndStatusIn(s.getId(), STAFF_ACTIVE_STATUSES);
+            if (!activeTickets.isEmpty()) {
+                hasPending = true;
+                sb.append(String.format("👤 *%s* (%d Pending):\n", s.getName(), activeTickets.size()));
+                for (Ticket t : activeTickets) {
+                    String clientName = t.getClient() != null ? this.nullToDefault(t.getClient().getName(), t.getClient().getPhoneNumber()) : "-";
+                    sb.append(String.format("   • *%s* | %s\n", t.getCaseId() != null ? t.getCaseId() : "Pending", t.getServiceType()));
+                    sb.append(String.format("     Client: %s\n", clientName));
+                }
+                sb.append("\n");
+            }
+        }
+        
+        if (!hasPending) {
+            sb.append("ℹ️ Abhi kisi bhi staff ke paas koi pending task nahi hai.");
+        }
+        
+        this.whatsappMessageSender.sendMessage(adminPhone, sb.toString());
+    }
+
+    private double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+        final double R = 6371e3; // Earth radius in meters
+        double latDistance = Math.toRadians(lat2 - lat1);
+        double lonDistance = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(latDistance / 2) * Math.sin(latDistance / 2)
+                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                * Math.sin(lonDistance / 2) * Math.sin(lonDistance / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    private boolean verifyLocation(String messageContent) {
+        try {
+            String[] parts = messageContent.split(",");
+            if (parts.length == 2) {
+                double lat = Double.parseDouble(parts[0].trim());
+                double lon = Double.parseDouble(parts[1].trim());
+                double distance = calculateDistance(lat, lon, officeLatitude, officeLongitude);
+                return distance <= officeRadiusMeters;
+            }
+        } catch (Exception e) {
+            log.error("Failed to parse coordinates: " + messageContent, e);
+        }
+        return false;
     }
 }

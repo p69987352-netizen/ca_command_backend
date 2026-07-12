@@ -68,6 +68,15 @@ public class AdminTicketService {
     @org.springframework.beans.factory.annotation.Value("${app.base-url:http://localhost:5001}")
     private String baseUrl;
 
+    @org.springframework.beans.factory.annotation.Value("${office.latitude:26.4734}")
+    private double officeLatitude;
+
+    @org.springframework.beans.factory.annotation.Value("${office.longitude:74.6426}")
+    private double officeLongitude;
+
+    @org.springframework.beans.factory.annotation.Value("${office.radius-meters:200}")
+    private double officeRadiusMeters;
+
     public AdminTicketService(
             TicketRepository ticketRepository,
             StaffRepository staffRepository,
@@ -120,7 +129,7 @@ public class AdminTicketService {
 
         Staff savedStaff = staffRepository.save(staff);
         whatsappMessageSender.sendMessage(savedStaff.getPhoneNumber(),
-                "Welcome to CA Command Center. You have been registered as a staff member.");
+                "Welcome to SPC - CC. You have been registered as a staff member.");
         log.info("Added staff member id={} phone={}", savedStaff.getId(), savedStaff.getPhoneNumber());
         return savedStaff;
     }
@@ -242,6 +251,9 @@ public class AdminTicketService {
         return signAttendanceUrls(attendanceRepository.findByAttendanceDateBetweenOrderByAttendanceDateDesc(startOfMonth, endOfMonth));
     }
 
+    @org.springframework.beans.factory.annotation.Value("${whatsapp.admin-phone-number:919783271934}")
+    private String adminPhoneNumber;
+
     public void generateAndSendAttendanceReport() {
         java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
         List<Staff> activeStaff = staffRepository.findAll().stream()
@@ -249,82 +261,117 @@ public class AdminTicketService {
                 .toList();
 
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("📊 *Daily Staff Attendance Report — %s* 📊\n\n", today));
+        sb.append(String.format("📊 *DAILY REPORT SUMMARY - %s*\n\n", today.format(java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy"))));
 
-        List<com.caCommand.caCommand.entities.Attendance> todayAttendance = attendanceRepository.findByAttendanceDate(today);
-
-        List<Staff> presentStaff = new java.util.ArrayList<>();
-        List<com.caCommand.caCommand.entities.Attendance> presentRecords = new java.util.ArrayList<>();
-        List<Staff> absentStaff = new java.util.ArrayList<>();
-        List<com.caCommand.caCommand.entities.Attendance> absentRecords = new java.util.ArrayList<>();
-        List<Staff> pendingStaff = new java.util.ArrayList<>();
+        java.util.List<String> presentLines = new java.util.ArrayList<>();
+        java.util.List<String> absentLines = new java.util.ArrayList<>();
+        java.util.List<String> notMarkedNames = new java.util.ArrayList<>();
 
         for (Staff staff : activeStaff) {
-            java.util.Optional<com.caCommand.caCommand.entities.Attendance> recordOpt = todayAttendance.stream()
-                    .filter(a -> a.getStaff().getId().equals(staff.getId()))
-                    .findFirst();
-
-            if (recordOpt.isPresent()) {
-                com.caCommand.caCommand.entities.Attendance record = recordOpt.get();
-                if (com.caCommand.caCommand.enums.AttendanceStatus.PRESENT.equals(record.getStatus())) {
-                    presentStaff.add(staff);
-                    presentRecords.add(record);
-                } else if (com.caCommand.caCommand.enums.AttendanceStatus.ABSENT.equals(record.getStatus())) {
-                    absentStaff.add(staff);
-                    absentRecords.add(record);
+            Optional<com.caCommand.caCommand.entities.Attendance> attOpt = attendanceRepository.findByStaffAndAttendanceDate(staff, today);
+            if (attOpt.isPresent()) {
+                com.caCommand.caCommand.entities.Attendance att = attOpt.get();
+                if (com.caCommand.caCommand.enums.AttendanceStatus.PRESENT.equals(att.getStatus())) {
+                    String checkinTime = att.getCreatedAt() != null ? att.getCreatedAt().atZone(java.time.ZoneId.of("Asia/Kolkata")).format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a")) : "-";
+                    String checkoutTime = att.getExitTime() != null ? att.getExitTime().atZone(java.time.ZoneId.of("Asia/Kolkata")).format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a")) : "Not Checked Out";
+                    
+                    StringBuilder pBuilder = new StringBuilder();
+                    pBuilder.append(String.format("• *%s* (In: %s | Out: %s)", staff.getName(), checkinTime, checkoutTime));
+                    if (att.getLocationLink() != null) {
+                        pBuilder.append("\n  📍 *Location:* ").append(att.getLocationLink());
+                    }
+                    if (att.getExitLocationLink() != null) {
+                        pBuilder.append("\n  📍 *Exit Location:* ").append(att.getExitLocationLink());
+                    }
+                    presentLines.add(pBuilder.toString());
+                } else if (com.caCommand.caCommand.enums.AttendanceStatus.ABSENT.equals(att.getStatus())) {
+                    absentLines.add(String.format("• *%s*\n  ↳ Reason: %s", staff.getName(), att.getReason() != null ? att.getReason() : "No reason provided"));
+                } else {
+                    notMarkedNames.add(staff.getName());
                 }
             } else {
-                pendingStaff.add(staff);
+                notMarkedNames.add(staff.getName());
             }
         }
 
-        sb.append(String.format("📈 *Summary:*\n• Present: %d\n• Absent: %d\n• Not Marked (Pending): %d\n\n", 
-                presentStaff.size(), absentStaff.size(), pendingStaff.size()));
-        sb.append("━━━━━━━━━━━━━━━━━━━━━\n\n");
+        // 1. Attendance & Location Details
+        sb.append("🟢 *PRESENT STAFF:*\n");
+        if (presentLines.isEmpty()) {
+            sb.append("None\n");
+        } else {
+            for (String line : presentLines) {
+                sb.append(line).append("\n");
+            }
+        }
+        sb.append("\n");
 
-        if (!presentStaff.isEmpty()) {
-            sb.append("✅ *PRESENT:*\n");
-            for (int i = 0; i < presentStaff.size(); i++) {
-                Staff s = presentStaff.get(i);
-                com.caCommand.caCommand.entities.Attendance r = presentRecords.get(i);
-                java.time.LocalDateTime checkInTime = r.getCreatedAt();
-                String timeStr = "N/A";
-                if (checkInTime != null) {
-                    timeStr = checkInTime.atZone(java.time.ZoneId.of("UTC"))
-                            .withZoneSameInstant(java.time.ZoneId.of("Asia/Kolkata"))
-                            .toLocalTime()
-                            .format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a"));
+        sb.append("🔴 *ABSENT STAFF:*\n");
+        if (absentLines.isEmpty()) {
+            sb.append("None\n");
+        } else {
+            for (String line : absentLines) {
+                sb.append(line).append("\n");
+            }
+        }
+        sb.append("\n");
+
+        sb.append("🟡 *PENDING (NOT MARKED):*\n");
+        if (notMarkedNames.isEmpty()) {
+            sb.append("None\n");
+        } else {
+            sb.append(String.join(", ", notMarkedNames)).append("\n");
+        }
+        sb.append("\n");
+
+        // 2. Pending Workload Count
+        sb.append("📋 *PENDING WORKLOAD (BY STAFF):*\n");
+        List<String> activeStatuses = List.of("ASSIGNED_TO_STAFF", "PENDING_ADMIN_QC", "CALL_PENDING");
+        boolean anyWorkload = false;
+        for (Staff staff : activeStaff) {
+            List<Ticket> activeTickets = ticketRepository.findByAssignedStaffIdAndStatusIn(staff.getId(), activeStatuses);
+            if (!activeTickets.isEmpty()) {
+                anyWorkload = true;
+                sb.append(String.format("• *%s*: %d pending case(s)\n", staff.getName(), activeTickets.size()));
+            }
+        }
+        if (!anyWorkload) {
+            sb.append("No active tickets pending.\n");
+        }
+        sb.append("\n");
+
+        // 3. Completed Today
+        sb.append("✅ *TASKS COMPLETED TODAY:*\n");
+        List<Ticket> finishedTickets = ticketRepository.findByStatus("FINISHED");
+        List<Ticket> completedTickets = ticketRepository.findByStatus("COMPLETED");
+        List<Ticket> allFinished = new java.util.ArrayList<>();
+        allFinished.addAll(finishedTickets);
+        allFinished.addAll(completedTickets);
+
+        long completedTodayCount = 0;
+        for (Ticket t : allFinished) {
+            java.time.LocalDateTime timeToCheck = t.getCompletedAt() != null ? t.getCompletedAt() : t.getUpdatedAt();
+            if (timeToCheck != null) {
+                java.time.LocalDate dateInKolkata = timeToCheck
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .withZoneSameInstant(java.time.ZoneId.of("Asia/Kolkata"))
+                        .toLocalDate();
+                if (dateInKolkata.isEqual(today)) {
+                    completedTodayCount++;
+                    String staffName = t.getAssignedStaff() != null ? t.getAssignedStaff().getName() : "Unassigned";
+                    sb.append(String.format("• *%s* | %s (Staff: %s)\n", t.getCaseId(), t.getServiceType(), staffName));
                 }
-                sb.append(String.format("• %s (%s)\n", s.getName(), timeStr));
             }
-            sb.append("\n");
         }
-
-        if (!absentStaff.isEmpty()) {
-            sb.append("❌ *ABSENT:*\n");
-            for (int i = 0; i < absentStaff.size(); i++) {
-                Staff s = absentStaff.get(i);
-                com.caCommand.caCommand.entities.Attendance r = absentRecords.get(i);
-                sb.append(String.format("• %s (Reason: %s)\n", s.getName(), r.getReason() != null ? r.getReason() : "No reason specified"));
-            }
-            sb.append("\n");
+        if (completedTodayCount == 0) {
+            sb.append("No cases completed today.\n");
         }
-
-        if (!pendingStaff.isEmpty()) {
-            sb.append("⚠️ *NOT MARKED (PENDING):*\n");
-            for (Staff s : pendingStaff) {
-                sb.append(String.format("• %s\n", s.getName()));
-            }
-            sb.append("\n");
-        }
-
-        sb.append("━━━━━━━━━━━━━━━━━━━━━\nRegards,\n*CA Command Center*");
 
         try {
-            whatsappMessageSender.sendMessage("+919828700283", sb.toString());
-            whatsappMessageSender.sendMessage("+919783271934", sb.toString());
+            String primaryAdmin = adminPhoneNumber != null ? adminPhoneNumber.replaceAll("[^0-9]", "") : "919783271934";
+            whatsappMessageSender.sendMessage(primaryAdmin, sb.toString());
+            whatsappMessageSender.sendMessage("919828700283", sb.toString());
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Failed to send workload report via WhatsApp", e);
         }
     }
 
@@ -334,8 +381,75 @@ public class AdminTicketService {
             if (attendance.getPhotoUrl() != null && !attendance.getPhotoUrl().isBlank()) {
                 attendance.setPhotoUrl(s3StorageService.getSignedUrl(attendance.getPhotoUrl()));
             }
+            if (attendance.getExitPhotoUrl() != null && !attendance.getExitPhotoUrl().isBlank()) {
+                attendance.setExitPhotoUrl(s3StorageService.getSignedUrl(attendance.getExitPhotoUrl()));
+            }
         }
         return list;
+    }
+
+    public double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+        final double R = 6371e3; // Earth radius in meters
+        double latDistance = Math.toRadians(lat2 - lat1);
+        double lonDistance = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(latDistance / 2) * Math.sin(latDistance / 2)
+                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                * Math.sin(lonDistance / 2) * Math.sin(lonDistance / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    public double[] parseCoordinates(String locationLink) {
+        if (locationLink == null || locationLink.isBlank()) return null;
+        try {
+            String coordsPart = null;
+            if (locationLink.contains("q=")) {
+                int start = locationLink.indexOf("q=") + 2;
+                int end = locationLink.indexOf("&", start);
+                coordsPart = end == -1 ? locationLink.substring(start) : locationLink.substring(start, end);
+            } else if (locationLink.contains("maps?q=")) {
+                int start = locationLink.indexOf("maps?q=") + 7;
+                int end = locationLink.indexOf("&", start);
+                coordsPart = end == -1 ? locationLink.substring(start) : locationLink.substring(start, end);
+            } else if (locationLink.matches("^-?\\d+(\\.\\d+)?,\\s*-?\\d+(\\.\\d+)?$")) {
+                coordsPart = locationLink.trim();
+            }
+            if (coordsPart != null) {
+                String[] parts = coordsPart.split(",");
+                if (parts.length == 2) {
+                    return new double[]{
+                        Double.parseDouble(parts[0].trim()),
+                        Double.parseDouble(parts[1].trim())
+                    };
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to parse coordinates from link: " + locationLink, e);
+        }
+        return null;
+    }
+
+    public Boolean verifyLocationCoordinates(String locationLink) {
+        double[] coords = parseCoordinates(locationLink);
+        if (coords == null) return null;
+        double dist = calculateDistance(coords[0], coords[1], officeLatitude, officeLongitude);
+        return dist <= officeRadiusMeters;
+    }
+
+    public com.caCommand.caCommand.entities.Attendance updateAttendanceLocation(java.util.UUID attendanceId, String locationLink, String exitLocationLink) {
+        com.caCommand.caCommand.entities.Attendance attendance = attendanceRepository.findById(attendanceId)
+                .orElseThrow(() -> new IllegalArgumentException("Attendance record not found"));
+        
+        if (locationLink != null) {
+            attendance.setLocationLink(locationLink);
+            attendance.setIsVerifiedEntry(verifyLocationCoordinates(locationLink));
+        }
+        if (exitLocationLink != null) {
+            attendance.setExitLocationLink(exitLocationLink);
+            attendance.setIsVerifiedExit(verifyLocationCoordinates(exitLocationLink));
+        }
+        
+        return attendanceRepository.save(attendance);
     }
 
     public List<Ticket> getAllTickets() {
@@ -343,7 +457,16 @@ public class AdminTicketService {
     }
 
     public void sendManualAttendanceReminders() {
+        sendManualAttendanceReminders(null);
+    }
+
+    public void sendManualAttendanceReminders(List<String> staffIds) {
         List<Staff> activeStaff = staffRepository.findAll().stream().filter(Staff::getIsActive).toList();
+        if (staffIds != null && !staffIds.isEmpty()) {
+            activeStaff = activeStaff.stream()
+                    .filter(s -> staffIds.contains(s.getId().toString()))
+                    .toList();
+        }
         java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
         for (Staff staff : activeStaff) {
             java.util.Optional<com.caCommand.caCommand.entities.Attendance> attOpt = attendanceRepository.findByStaffAndAttendanceDate(staff, today);
@@ -726,8 +849,16 @@ public class AdminTicketService {
         ));
 
         if (ticket.getAssignedStaff() != null) {
-            whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(),
-                    "Ticket closed successfully for client " + ticket.getClient().getPhoneNumber());
+            String staffMsg = String.format("🔔 *Task Completed & Closed:*\n\n" +
+                    "• *Case ID:* %s\n" +
+                    "• *Client:* %s (%s)\n" +
+                    "• *Service:* %s\n\n" +
+                    "This task has been successfully marked as completed.",
+                    ticket.getCaseId(),
+                    ticket.getClient().getName() != null ? ticket.getClient().getName() : "Unknown",
+                    ticket.getClient().getPhoneNumber(),
+                    ticket.getServiceType());
+            whatsappMessageSender.sendMessage(ticket.getAssignedStaff().getPhoneNumber(), staffMsg);
         }
 
         chatSessionRepository.deleteById(ticket.getClient().getPhoneNumber());
@@ -1147,5 +1278,86 @@ public class AdminTicketService {
      */
     public List<Ticket> getCallPendingTickets() {
         return ticketRepository.findByStatusOrderByCreatedAtDesc(TicketStatus.CALL_PENDING.name());
+    }
+
+    @Transactional
+    public Ticket createTask(String clientName, String clientPhoneNumber, String serviceType, String assignedStaffId, String notes, String s3Url) {
+        String cleanPhone = clientPhoneNumber.replaceAll("[^0-9]", "");
+        if (cleanPhone.startsWith("91") && cleanPhone.length() > 10) {
+            // Keep as is
+        } else if (cleanPhone.length() == 10) {
+            cleanPhone = "91" + cleanPhone;
+        }
+        
+        final String finalPhone = cleanPhone;
+        Client client = clientRepository.findByPhoneNumber(finalPhone)
+                .or(() -> clientRepository.findByPhoneNumber(finalPhone.startsWith("91") && finalPhone.length() > 10 ? finalPhone.substring(2) : finalPhone))
+                .orElseGet(() -> {
+                    Client c = new Client();
+                    c.setPhoneNumber(finalPhone);
+                    c.setName(clientName);
+                    c.setCreatedAt(LocalDateTime.now());
+                    return clientRepository.save(c);
+                });
+        
+        if (client.getName() == null || client.getName().isBlank() || client.getName().equals(client.getPhoneNumber())) {
+            client.setName(clientName);
+            clientRepository.save(client);
+        }
+
+        Staff staff = staffRepository.findById(UUID.fromString(assignedStaffId))
+                .orElseThrow(() -> new ResourceNotFoundException("Staff member not found"));
+
+        Ticket ticket = new Ticket();
+        ticket.setClient(client);
+        ticket.setServiceType(serviceType);
+        ticket.setAssignedStaff(staff);
+        ticket.setStatus(TicketStatus.ASSIGNED_TO_STAFF.name());
+        ticket.setTicketCategory("MANUAL_TASK");
+        ticket.setProgressPercent(10);
+        ticket.setCreatedAt(LocalDateTime.now());
+        ticket.setUpdatedAt(LocalDateTime.now());
+        ticket.setAdminNotes(notes);
+        if (s3Url != null && !s3Url.isEmpty()) {
+            String[] urls = s3Url.split("\n");
+            StringBuilder docBuilder = new StringBuilder();
+            for (String url : urls) {
+                if (docBuilder.length() > 0) docBuilder.append("\n");
+                if (url.contains(" :: ")) {
+                    docBuilder.append(url);
+                } else {
+                    docBuilder.append("Admin Document :: ").append(url);
+                }
+            }
+            ticket.setClientDocuments(docBuilder.toString());
+        }
+
+        String dateStr = LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMdd"));
+        String randomNum = String.format("%04d", new java.util.Random().nextInt(10000));
+        ticket.setCaseId("CASE-" + dateStr + "-" + randomNum);
+        ticket.setCaseStage(com.caCommand.caCommand.enums.CaseStage.ONBOARDING);
+
+        Ticket savedTicket = saveAndBroadcast(ticket);
+
+        // Send WhatsApp alerts
+        String gitaQuote = getRandomGitaQuote();
+        String clientMsg = String.format("🚩 *Jai Shree Ram* 🚩\n\nDear %s,\nYour request for *%s* has been received and assigned to our staff member *%s*.\n\n📖 %s\n\nThank you for choosing SPC - CC!", 
+                client.getName(), serviceType, staff.getName(), gitaQuote);
+        whatsappMessageSender.sendMessage(client.getPhoneNumber(), clientMsg);
+
+        String staffMsg = String.format("🔔 *New Task Assigned:*\nCase ID: %s\nClient: %s (%s)\nService: %s\nNotes: %s", 
+                savedTicket.getCaseId(), client.getName(), client.getPhoneNumber(), serviceType, notes != null ? notes : "None");
+        whatsappMessageSender.sendMessage(staff.getPhoneNumber(), staffMsg);
+
+        return savedTicket;
+    }
+
+    @Transactional
+    public void deleteTicket(String ticketId) {
+        Ticket ticket = ticketRepository.findById(UUID.fromString(ticketId))
+                .orElseThrow(() -> new ResourceNotFoundException("Ticket not found"));
+        
+        ticketRepository.delete(ticket);
+        this.messagingTemplate.convertAndSend((String) "/topic/updates", (Object) Map.of("type", "CHAT_UPDATE", "timestamp", System.currentTimeMillis()));
     }
 }
