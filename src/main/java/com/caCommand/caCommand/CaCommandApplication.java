@@ -15,11 +15,11 @@ public class CaCommandApplication {
 
 	@jakarta.annotation.PostConstruct
 	public void init() {
-		java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Kolkata"));
+		java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"));
 	}
 
 	public static void main(String[] args)	 {
-		java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Kolkata"));
+		java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"));
 		SpringApplication.run(CaCommandApplication.class, args);
 	}
 }
