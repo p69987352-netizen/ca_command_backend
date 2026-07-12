@@ -714,16 +714,22 @@ public class ChatBotService {
                 if (attendance.getExitLocationLink() == null) {
                     attendance.setExitLocationLink("https://www.google.com/maps?q=" + messageContent);
                     attendance.setIsVerifiedExit(isVerified);
+                    if (!isVerified) {
+                        attendance.setStatus(com.caCommand.caCommand.enums.AttendanceStatus.ABSENT);
+                    }
                     this.attendanceRepository.save(attendance);
+                    
                     if (isVerified) {
                         log.info("Exit location verified for staff: {}", staff.getName());
+                        String gitaQuote = getRandomGitaQuote();
+                        this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
+                            "✅ Dhanyawad! Aapki exit attendance save ho gayi hai. Have a good evening! 🏡\n\n" +
+                            "📖 *Bhagavad Gita Quote:*\n" + gitaQuote);
                     } else {
                         log.warn("Exit location not verified (outside boundary) for staff: {}", staff.getName());
+                        this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
+                            "⚠️ Aapki shared exit location office range se match nahi karti hai (mismatch hai). Isliye aapki daily attendance status **ABSENT** mark kar di gayi hai. Agar koi issues hain, toh please correct location share karein ya Admin se contact karein. 🏡");
                     }
-                    String gitaQuote = getRandomGitaQuote();
-                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
-                        "✅ Dhanyawad! Aapki exit attendance save ho gayi hai. Have a good evening! 🏡\n\n" +
-                        "📖 *Bhagavad Gita Quote:*\n" + gitaQuote);
                 } else {
                     this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "ℹ️ Exit location pehle se hi saved hai.");
                 }
@@ -731,17 +737,23 @@ public class ChatBotService {
                 if (attendance.getLocationLink() == null) {
                     attendance.setLocationLink("https://www.google.com/maps?q=" + messageContent);
                     attendance.setIsVerifiedEntry(isVerified);
+                    if (!isVerified) {
+                        attendance.setStatus(com.caCommand.caCommand.enums.AttendanceStatus.ABSENT);
+                    }
                     this.attendanceRepository.save(attendance);
+                    
                     if (isVerified) {
                         log.info("Check-in location verified for staff: {}", staff.getName());
+                        String gitaQuote = getRandomGitaQuote();
+                        this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
+                            "✅ Dhanyawad! Aapki check-in attendance save ho gayi hai. Aapka din shubh ho! 🏢\n\n" +
+                            "📖 *Bhagavad Gita Quote of the Day:*\n" + gitaQuote +
+                            "\n\n💡 Yaad rakhein: Shaam ko exit karne ke liye exit photo ke saath 'EXIT' caption likhein aur location share karein.");
                     } else {
                         log.warn("Check-in location not verified (outside boundary) for staff: {}", staff.getName());
+                        this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
+                            "⚠️ Aapki shared check-in location office range se match nahi karti hai (mismatch hai). Isliye aapki attendance status **ABSENT** mark kar di gayi hai. Agar aap office me hi hain, toh please apni current GPS location check karke dobara share karein ya Admin se contact karein. 🏢");
                     }
-                    String gitaQuote = getRandomGitaQuote();
-                    this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(),
-                        "✅ Dhanyawad! Aapki check-in attendance save ho gayi hai. Aapka din shubh ho! 🏢\n\n" +
-                        "📖 *Bhagavad Gita Quote of the Day:*\n" + gitaQuote +
-                        "\n\n💡 Yaad rakhein: Shaam ko exit karne ke liye exit photo ke saath 'EXIT' caption likhein aur location share karein.");
                 } else {
                     this.whatsappMessageSender.sendMessage(staff.getPhoneNumber(), "ℹ️ Check-in location pehle se hi saved hai.");
                 }
